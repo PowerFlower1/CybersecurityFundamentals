@@ -1,0 +1,6 @@
+{
+  "name": "Ready Force Labs: Cybersecurity Fundamentals",
+  "description": "Gamified cybersecurity learning platform by Ready Force Cyber, focused on the 5 Concepts of Cybersecurity.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Room",
+      "description": "A game session room.",
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["waiting", "started", "finished"] },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "difficulty": { "type": "string", "enum": ["all", "easy", "medium", "hard"] },
+        "endTime": { "type": "number" },
+        "questionCount": { "type": "number" },
+        "timePerQuestion": { "type": "number" }
+      },
+      "required": ["status", "hostId", "hostName", "createdAt", "difficulty", "endTime", "questionCount", "timePerQuestion"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A player within a room.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "score": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "score", "updatedAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized host users",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" }
+      },
+      "required": ["email"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Game room details."
+    },
+    "/rooms/{roomId}/players/{playerId}": {
+      "schema": "Player",
+      "description": "Players in the game room and their scores."
+    },
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Authorized hosts"
+    }
+  }
+}
