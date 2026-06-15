@@ -25,6 +25,11 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/rooms/$(roomId)/players/$(request.auth.uid));
     }
 
+    function isRoomHost(roomId) {
+      return exists(/databases/$(database)/documents/rooms/$(roomId))
+        && get(/databases/$(database)/documents/rooms/$(roomId)).data.hostId == request.auth.uid;
+    }
+
     function isValidRoom(data) {
       return data.keys().hasAll(['status', 'hostId', 'hostName', 'createdAt', 'difficulty', 'endTime', 'questionCount', 'timePerQuestion'])
         && data.keys().size() == 8
@@ -69,7 +74,8 @@ service cloud.firestore {
       allow delete: if isSignedIn();
 
       match /players/{playerId} {
-        allow read: if isSignedIn() && isRoomMember(roomId);
+        // Members see each other; the host monitors the whole roster.
+        allow read: if isSignedIn() && (isRoomMember(roomId) || isRoomHost(roomId));
 
         allow create: if isSignedIn() && isValidId(playerId)
           && playerId == request.auth.uid
