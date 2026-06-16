@@ -100,6 +100,8 @@ export default function App() {
   const [instructorPassword, setInstructorPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [joinError, setJoinError] = useState("");
+  const [hostError, setHostError] = useState("");
+  const [isHosting, setIsHosting] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
@@ -369,7 +371,9 @@ export default function App() {
   };
 
   const createRoom = async () => {
-    if (!isAdmin) return;
+    if (!isAdmin || isHosting) return;
+    setHostError("");
+    setIsHosting(true);
     try {
       const { code } = await api.createSession({
         difficulty: difficultyFilter,
@@ -383,8 +387,35 @@ export default function App() {
       setPlayers([]);
       setSessionTimeLeft(null);
       setGameState("hosting");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to create session:", error);
+      if (error?.status === 401) {
+        // Token expired/invalid — send the instructor back to sign in.
+        clearInstructorToken();
+        setIsAdmin(false);
+        setUser(null);
+        setGameState("login");
+        setLoginError("Your session expired. Please sign in again.");
+      } else {
+        setHostError(
+          "Couldn't start a session. Make sure the app server is running, then try again.",
+        );
+      }
+    } finally {
+      setIsHosting(false);
+    }
+  };
+
+  // Host adjusts seconds-per-question while the session is still in the waiting
+  // room; the change is pushed to the server so every student gets it.
+  const updateTimePerQuestion = async (seconds: number) => {
+    setTimePerQuestion(seconds);
+    if (roomId && gameState === "hosting") {
+      try {
+        await api.updateSettings(roomId, { timePerQuestion: seconds });
+      } catch (error) {
+        console.error("Failed to update time per question:", error);
+      }
     }
   };
 
@@ -1187,7 +1218,7 @@ export default function App() {
                       Time per Question
                     </p>
                     <div className="flex bg-slate-100 rounded-2xl p-1.5 border border-slate-200">
-                      {[10, 20, 30, 60].map((time) => (
+                      {[10, 20, 30, 45, 60].map((time) => (
                         <button
                           key={time}
                           onClick={() => setTimePerQuestion(time)}
@@ -1227,12 +1258,18 @@ export default function App() {
                     </p>
                   </div>
                   <div className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl flex items-center gap-2 shrink-0 group-hover:bg-blue-700 transition-colors">
-                    <Play className="w-5 h-5 fill-current" /> Start
+                    <Play className="w-5 h-5 fill-current" /> {isHosting ? "Starting..." : "Start"}
                   </div>
                 </motion.button>
-                <p className="text-center text-xs text-slate-400 mt-4 font-medium">
-                  Students join from the home page using your session code.
-                </p>
+                {hostError ? (
+                  <p className="text-center text-sm text-rose-600 mt-4 font-medium">
+                    {hostError}
+                  </p>
+                ) : (
+                  <p className="text-center text-xs text-slate-400 mt-4 font-medium">
+                    Students join from the home page using your session code.
+                  </p>
+                )}
               </div>
 
               {/* Concept Info Footer Grid */}
@@ -1436,27 +1473,54 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Pre-start: duration picker */}
+                    {/* Pre-start: session settings */}
                     {!started && !ended && (
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
-                        <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
-                          Session Time Limit
-                        </p>
-                        <div className="flex flex-wrap justify-center gap-2">
-                          {[1, 3, 5, 10, 15].map((min) => (
-                            <button
-                              key={min}
-                              onClick={() => setSessionDurationMinutes(min)}
-                              className={cn(
-                                "px-6 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
-                                sessionDurationMinutes === min
-                                  ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
-                                  : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
-                              )}
-                            >
-                              {min} min
-                            </button>
-                          ))}
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
+                          <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
+                            Session Time Limit
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2">
+                            {[1, 3, 5, 10, 15].map((min) => (
+                              <button
+                                key={min}
+                                onClick={() => setSessionDurationMinutes(min)}
+                                className={cn(
+                                  "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
+                                  sessionDurationMinutes === min
+                                    ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
+                                    : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
+                                )}
+                              >
+                                {min} min
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
+                          <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
+                            Time per Question
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2">
+                            {[10, 20, 30, 45, 60].map((time) => {
+                              const active = (roomData?.timePerQuestion ?? timePerQuestion) === time;
+                              return (
+                                <button
+                                  key={time}
+                                  onClick={() => updateTimePerQuestion(time)}
+                                  className={cn(
+                                    "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
+                                    active
+                                      ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
+                                      : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
+                                  )}
+                                >
+                                  {time}s
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       </div>
                     )}

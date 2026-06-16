@@ -238,6 +238,20 @@ async function startServer() {
     res.json({ playerId: id, playerToken: token, room: publicRoom(room) });
   });
 
+  app.post("/api/session/:code/settings", (req, res) => {
+    if (!requireInstructor(req, res)) return;
+    const room = rooms.get(req.params.code.toUpperCase());
+    if (!room) return res.status(404).json({ error: "Session not found." });
+    if (room.status !== "waiting") {
+      return res.status(409).json({ error: "Settings can only change before the session starts." });
+    }
+    const { difficulty, questionCount, timePerQuestion } = req.body ?? {};
+    if (["all", "easy", "medium", "hard"].includes(difficulty)) room.difficulty = difficulty;
+    if (Number(questionCount) > 0) room.questionCount = Number(questionCount);
+    if (Number(timePerQuestion) > 0) room.timePerQuestion = Number(timePerQuestion);
+    res.json(publicRoom(room));
+  });
+
   app.post("/api/session/:code/start", (req, res) => {
     if (!requireInstructor(req, res)) return;
     const room = rooms.get(req.params.code.toUpperCase());

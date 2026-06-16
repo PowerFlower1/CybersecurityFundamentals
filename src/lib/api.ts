@@ -76,6 +76,12 @@ export const api = {
   ): Promise<{ playerId: string; playerToken: string; room: RoomState }> =>
     req(`/api/session/${code}/join`, { method: "POST", body: JSON.stringify({ name }) }),
 
+  updateSettings: (
+    code: string,
+    settings: { difficulty?: string; questionCount?: number; timePerQuestion?: number },
+  ): Promise<RoomState> =>
+    req(`/api/session/${code}/settings`, { method: "POST", body: JSON.stringify(settings) }, true),
+
   startSession: (code: string, durationMinutes: number): Promise<{ endTime: number }> =>
     req(`/api/session/${code}/start`, { method: "POST", body: JSON.stringify({ durationMinutes }) }, true),
 
