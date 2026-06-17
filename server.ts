@@ -147,13 +147,18 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  // Trust one proxy hop (e.g. Cloud Run / a load balancer) so req.ip and the
+  // login rate limiter see the real client IP rather than the proxy's address.
+  app.set("trust proxy", 1);
+
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: "500kb" }));
 
   // ---- Auth -------------------------------------------------------------
   app.post("/api/auth/login", (req, res) => {
     const ip = req.ip ?? "unknown";
-    if (isRateLimited(`login:${ip}`, 10, 10 * 60 * 1000)) {
+    // 5 attempts per IP per minute.
+    if (isRateLimited(`login:${ip}`, 5, 60 * 1000)) {
       return res.status(429).json({ error: "Too many attempts. Try again later." });
     }
     const { password } = req.body ?? {};
