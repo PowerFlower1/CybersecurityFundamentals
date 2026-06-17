@@ -8,7 +8,7 @@ It stops when every box is checked.
   `app.set("trust proxy", 1)` right after `const app = express()` so `req.ip`
   and the login rate limiter use the real client IP behind Cloud Run / a load
   balancer (one proxy hop) instead of the proxy's address.
-- [ ] **Remove vestigial Firebase.** The app no longer uses Firebase. Delete
+- [x] **Remove vestigial Firebase.** The app no longer uses Firebase. Delete
   `firestore.rules`, `firebase.json`, and `.firebaserc`, and remove the
   `firebase` dependency from `package.json`. Confirm `npm run lint` still passes.
 - [ ] **Rewrite README.** Replace the AI Studio boilerplate in `README.md` with
