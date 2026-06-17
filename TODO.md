@@ -11,7 +11,7 @@ It stops when every box is checked.
 - [x] **Remove vestigial Firebase.** The app no longer uses Firebase. Delete
   `firestore.rules`, `firebase.json`, and `.firebaserc`, and remove the
   `firebase` dependency from `package.json`. Confirm `npm run lint` still passes.
-- [ ] **Rewrite README.** Replace the AI Studio boilerplate in `README.md` with
+- [x] **Rewrite README.** Replace the AI Studio boilerplate in `README.md` with
   real docs: what the app is, `npm install` / `npm run dev`, the `APP_PASSWORD`
   and `GEMINI_API_KEY` environment variables, and the host-a-session /
   join-with-code flow.
