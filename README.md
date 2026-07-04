@@ -93,9 +93,10 @@ produces a static client in `dist/` and a bundled server at `dist/server.cjs`;
 `npm start` serves both. Set `APP_PASSWORD` (and optionally `GEMINI_API_KEY`) in
 the host environment.
 
-**Cloudflare Pages**: see [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). The API
-runs as a Worker with Durable Objects for live session state; build with
-`npm run build:cf` and output to `dist`.
+**Cloudflare (Worker + Static Assets)**: see
+[DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md). One Worker serves the client,
+the `/api`, and the Durable Objects that hold live session state; build the
+client with `npm run build:cf`, then `wrangler deploy`.
 
 > **Note:** live session state is held in memory in a single server process, so
 > it resets on restart and is not shared across multiple instances. This is fine
