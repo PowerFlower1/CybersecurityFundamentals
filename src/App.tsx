@@ -27,80 +27,34 @@ import {
   FileCheck,
   Activity,
   KeyRound,
+  Copy,
+  Crown,
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { CYBER_QUESTIONS, type Question } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
-import { auth, db } from "./lib/firebase";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
-  onAuthStateChanged,
-  signOut,
-  signInAnonymously,
-  updateProfile,
-  type User,
-} from "firebase/auth";
-import {
-  doc,
-  setDoc,
-  getDoc,
-  onSnapshot,
-  collection,
-  query,
-  orderBy,
-  serverTimestamp,
-  updateDoc,
-  deleteDoc,
-  getDocs,
-  collectionGroup,
-} from "firebase/firestore";
+  api,
+  getInstructorToken,
+  setInstructorToken,
+  clearInstructorToken,
+  type RoomState,
+} from "./lib/api";
 
-enum OperationType {
-  CREATE = "create",
-  UPDATE = "update",
-  DELETE = "delete",
-  LIST = "list",
-  GET = "get",
-  WRITE = "write",
+// Local identity (no Firebase). Instructors hold a server-issued token; students
+// hold a server-issued player id + token for the session they joined.
+interface SessionUser {
+  uid: string;
+  displayName: string | null;
+  isAnonymous: boolean;
 }
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  };
-}
+type GameState = "login" | "lobby" | "waiting" | "hosting" | "playing" | "results" | "admin_dashboard" | "campaign";
 
-function handleFirestoreError(
-  error: unknown,
-  operationType: OperationType,
-  path: string | null,
-) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path,
-  };
-  console.error("Firestore Error: ", JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-type GameState = "login" | "lobby" | "waiting" | "playing" | "results" | "admin_dashboard" | "campaign";
-
-// Instructor session token, issued by the app server after password login.
-const INSTRUCTOR_TOKEN_KEY = "rfc_instructor_token";
-
-const getInstructorToken = () => sessionStorage.getItem(INSTRUCTOR_TOKEN_KEY);
+// Per-session student identity, returned by the server on join.
+const PLAYER_KEY = "rfc_player";
 
 const CONCEPT_ICONS: Record<string, ReactNode> = {
   art_of_defending: <ShieldCheck className="w-5 h-5" />,
@@ -118,7 +72,8 @@ interface PlayerData {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
+  const playerInfoRef = useRef<{ code: string; id: string; token: string; name: string } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [gameState, setGameState] = useState<GameState>("login");
   const [roomId, setRoomId] = useState("");
@@ -144,11 +99,15 @@ export default function App() {
   const [guestRoomId, setGuestRoomId] = useState("");
   const [instructorPassword, setInstructorPassword] = useState("");
   const [loginError, setLoginError] = useState("");
+  const [joinError, setJoinError] = useState("");
+  const [hostError, setHostError] = useState("");
+  const [isHosting, setIsHosting] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
   const [allRooms, setAllRooms] = useState<any[]>([]);
   const [confirmExit, setConfirmExit] = useState(false);
+  const [codeCopied, setCodeCopied] = useState(false);
 
   // Campaign State
   const [unlockedConcepts, setUnlockedConcepts] = useState<string[]>(() => {
@@ -219,113 +178,89 @@ export default function App() {
 
   const currentQuestion = filteredQuestions[currentQuestionIndex];
 
-  // Auth Listener
+  // Restore an instructor session (if the token is still in sessionStorage).
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (u) {
-        setGameState("lobby");
-        // Test connection and check admin
-        // Instructor status comes from the app server's password login,
-        // not from the Firebase identity.
-        setIsAdmin(Boolean(getInstructorToken()));
-      } else {
-        setGameState("login");
-        setIsAdmin(false);
-      }
-    });
-    return () => unsubscribe();
+    if (getInstructorToken()) {
+      setIsAdmin(true);
+      setUser({ uid: "instructor", displayName: "Instructor", isAnonymous: false });
+      setGameState("lobby");
+    }
   }, []);
 
-  // Room Listener
+  // Room polling — replaces the Firestore room + players listeners. Both the
+  // host and students poll the same server endpoint for live state.
   useEffect(() => {
     if (!roomId) return;
-    const roomRef = doc(db, "rooms", roomId);
-    const unsubscribe = onSnapshot(
-      roomRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          setRoomData(data);
-          if (data.difficulty) {
-            setDifficultyFilter(data.difficulty);
-          }
-          if (data.status === "started" && gameState === "waiting") {
-            // Trigger local countdown without changing global status again
-            // Handled via useEffect below watching roomData.status
-          }
-        } else if (gameState !== "lobby" && gameState !== "login") {
-          setGameState("lobby");
-          setRoomId("");
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const data: RoomState = await api.getRoom(roomId);
+        if (cancelled) return;
+        setRoomData(data);
+        setPlayers(
+          data.players.map((p) => ({ uid: p.id, name: p.name, score: p.score })) as PlayerData[],
+        );
+        if (data.difficulty) {
+          setDifficultyFilter(data.difficulty as "all" | "easy" | "medium" | "hard");
         }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, `rooms/${roomId}`);
-      },
-    );
-    return () => unsubscribe();
-  }, [roomId, gameState]);
-
-  // Players Listener
-  useEffect(() => {
-    if (!roomId) return;
-    const playersRef = collection(db, "rooms", roomId, "players");
-    const q = query(playersRef, orderBy("score", "desc"));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const pData = snapshot.docs.map(
-          (doc) => ({ uid: doc.id, ...doc.data() }) as PlayerData,
-        );
-        setPlayers(pData);
-      },
-      (error) => {
-        handleFirestoreError(
-          error,
-          OperationType.LIST,
-          `rooms/${roomId}/players`,
-        );
-      },
-    );
-    return () => unsubscribe();
-  }, [roomId]);
-
-  // Global Question Bank Listener (requires sign-in; solo play falls back to the built-in bank)
-  useEffect(() => {
-    if (!user) {
-      setBankQuestions(CYBER_QUESTIONS);
-      return;
-    }
-    const qRef = collection(db, "questions");
-    const unsubscribe = onSnapshot(qRef, (snapshot) => {
-      if (snapshot.empty) {
-        setBankQuestions(CYBER_QUESTIONS);
-      } else {
-        const qData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Question));
-        setBankQuestions(qData);
+        // Host ended the session before a waiting student started — release them.
+        if (data.status === "finished" && gameState === "waiting") {
+          setGameState("results");
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        // 404 → room was deleted/expired. Send everyone but the host home.
+        if (err?.status === 404 && gameState !== "lobby" && gameState !== "login" && gameState !== "hosting") {
+          setRoomId("");
+          setGameState(user?.isAnonymous ? "login" : "lobby");
+        }
       }
-    }, (error) => {
-      console.error("Error fetching questions: ", error);
-    });
-    return () => unsubscribe();
-  }, [user]);
+    };
 
-  // Admin Dashboard Listener
+    poll();
+    const interval = setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [roomId, gameState, user?.isAnonymous]);
+
+  // Question bank — fetched from the server (seeded from the built-in set).
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getQuestions()
+      .then((data) => {
+        if (cancelled) return;
+        setBankQuestions(data.questions?.length ? (data.questions as Question[]) : CYBER_QUESTIONS);
+      })
+      .catch(() => {
+        if (!cancelled) setBankQuestions(CYBER_QUESTIONS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Admin dashboard — poll the list of active sessions.
   useEffect(() => {
     if (gameState !== "admin_dashboard" || !isAdmin) return;
-    const roomsRef = collection(db, "rooms");
-    const q = query(roomsRef, orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const rData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setAllRooms(rData);
-      },
-      (error) => {
-        console.error("Error fetching rooms:", error);
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const data = await api.listSessions();
+        if (!cancelled) setAllRooms(data.sessions.map((s: any) => ({ id: s.code, ...s })));
+      } catch (e) {
+        console.error("Error fetching sessions:", e);
       }
-    );
-    return () => unsubscribe();
+    };
+    poll();
+    const interval = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [gameState, isAdmin]);
 
   useEffect(() => {
@@ -354,7 +289,7 @@ export default function App() {
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (gameState === "playing" && roomData?.endTime) {
+    if ((gameState === "playing" || gameState === "hosting") && roomData?.endTime) {
       interval = setInterval(() => {
         const remaining = Math.max(
           0,
@@ -363,8 +298,12 @@ export default function App() {
         setSessionTimeLeft(remaining);
 
         if (remaining === 0) {
-          setGameState("results");
-          audio.playEnd();
+          // Students advance to their results; the host stays on the monitor
+          // to review the final leaderboard.
+          if (gameState === "playing") {
+            setGameState("results");
+            audio.playEnd();
+          }
           clearInterval(interval);
         }
       }, 1000);
@@ -380,207 +319,166 @@ export default function App() {
     setIsAuthenticating(true);
     setLoginError("");
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password: instructorPassword }),
-      });
-      if (!res.ok) {
-        setLoginError(
-          res.status === 429
-            ? "Too many attempts. Please wait a moment and try again."
-            : "Incorrect password. Please try again.",
-        );
-        return;
-      }
-      const { token } = await res.json();
-      sessionStorage.setItem(INSTRUCTOR_TOKEN_KEY, token);
+      const { token } = await api.login(instructorPassword);
+      setInstructorToken(token);
       setInstructorPassword("");
       setIsAdmin(true);
-      // An anonymous Firebase connection is still needed for live session data.
-      if (auth.currentUser) {
-        setGameState("lobby");
+      setUser({ uid: "instructor", displayName: "Instructor", isAnonymous: false });
+      setGameState("lobby");
+    } catch (error: any) {
+      if (error?.status === 429) {
+        setLoginError("Too many attempts. Please wait a moment and try again.");
+      } else if (error?.status === 401) {
+        setLoginError("Incorrect password. Please try again.");
       } else {
-        await signInAnonymously(auth);
+        setLoginError("Could not reach the server. Please try again.");
       }
-    } catch (error) {
-      console.error(error);
-      setLoginError("Could not reach the server. Please try again.");
     } finally {
       setIsAuthenticating(false);
     }
   };
 
   const handleSignOut = () => {
-    sessionStorage.removeItem(INSTRUCTOR_TOKEN_KEY);
+    clearInstructorToken();
+    sessionStorage.removeItem(PLAYER_KEY);
+    playerInfoRef.current = null;
     setIsAdmin(false);
-    signOut(auth);
+    setUser(null);
+    setRoomId("");
+    setRoomData(null);
+    setGameState("login");
   };
 
   const handleGuestJoin = async (e: any) => {
     e.preventDefault();
     if (!guestName || !guestRoomId) return;
     setIsAuthenticating(true);
+    setJoinError("");
     try {
-      const cred = await signInAnonymously(auth);
-      if (cred.user) {
-        await updateProfile(cred.user, { displayName: guestName });
-        // We don't need to manually set the user in state because onAuthStateChanged will handle it
-        // But we need to make sure we join the specific room they asked for
-        await joinRoom(guestRoomId, cred.user);
-      }
-    } catch (error) {
-      console.error(error);
-      console.error("Failed to join as guest. Please try again.");
+      const code = guestRoomId.toUpperCase();
+      const { playerId, playerToken } = await api.joinSession(code, guestName);
+      const info = { code, id: playerId, token: playerToken, name: guestName };
+      playerInfoRef.current = info;
+      sessionStorage.setItem(PLAYER_KEY, JSON.stringify(info));
+      setUser({ uid: playerId, displayName: guestName, isAnonymous: true });
+      setRoomId(code);
+      setGameState("waiting");
+    } catch (error: any) {
+      setJoinError(error?.message || "Could not join. Check the code and try again.");
     } finally {
       setIsAuthenticating(false);
     }
   };
 
   const createRoom = async () => {
-    if (!user) return;
-    const newRoomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const roomRef = doc(db, "rooms", newRoomId);
+    if (!isAdmin || isHosting) return;
+    setHostError("");
+    setIsHosting(true);
     try {
-      await setDoc(roomRef, {
-        status: "waiting",
-        hostId: user.uid,
-        hostName: user.displayName || user.email || 'Admin',
+      const { code } = await api.createSession({
         difficulty: difficultyFilter,
         questionCount: numberOfQuestions,
-        timePerQuestion: timePerQuestion,
-        endTime: 0,
-        createdAt: serverTimestamp(),
+        timePerQuestion,
+        hostName: user?.displayName || "Instructor",
       });
-      await joinRoom(newRoomId);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `rooms/${newRoomId}`);
+      // The host monitors the session; they do not join as a player.
+      setRoomId(code);
+      setRoomData(null);
+      setPlayers([]);
+      setSessionTimeLeft(null);
+      setGameState("hosting");
+    } catch (error: any) {
+      console.error("Failed to create session:", error);
+      if (error?.status === 401) {
+        // Token expired/invalid — send the instructor back to sign in.
+        clearInstructorToken();
+        setIsAdmin(false);
+        setUser(null);
+        setGameState("login");
+        setLoginError("Your session expired. Please sign in again.");
+      } else {
+        setHostError(
+          "Couldn't start a session. Make sure the app server is running, then try again.",
+        );
+      }
+    } finally {
+      setIsHosting(false);
     }
   };
 
-  const joinRoom = async (id: string, currentUser?: User) => {
-    const activeUser = currentUser || user;
-    if (!activeUser || !id) return;
-    const roomRef = doc(db, "rooms", id);
-    const playerRef = doc(db, "rooms", id, "players", activeUser.uid);
-    try {
-      const roomSnap = await getDoc(roomRef);
-      if (!roomSnap.exists()) {
-        console.error("Room not found");
-        return;
+  // Host adjusts seconds-per-question while the session is still in the waiting
+  // room; the change is pushed to the server so every student gets it.
+  const updateTimePerQuestion = async (seconds: number) => {
+    setTimePerQuestion(seconds);
+    if (roomId && gameState === "hosting") {
+      try {
+        await api.updateSettings(roomId, { timePerQuestion: seconds });
+      } catch (error) {
+        console.error("Failed to update time per question:", error);
       }
-      await setDoc(playerRef, {
-        name: activeUser.displayName || "Anonymous Agent",
-        score: 0,
-        updatedAt: serverTimestamp(),
-      });
-      setRoomId(id);
-      setGameState("waiting");
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `rooms/${id}`);
     }
   };
 
   const startRoomGame = async () => {
     if (!roomId) return;
-    const roomRef = doc(db, "rooms", roomId);
     try {
-      const endTime = Date.now() + sessionDurationMinutes * 60 * 1000;
-      await updateDoc(roomRef, { status: "started", endTime });
+      await api.startSession(roomId, sessionDurationMinutes);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `rooms/${roomId}`);
+      console.error("Failed to start session:", error);
+    }
+  };
+
+  // Host ends the live session early; this also ends it for every student.
+  const endRoomGame = async () => {
+    if (!roomId) return;
+    try {
+      await api.endSession(roomId);
+    } catch (error) {
+      console.error("Failed to end session:", error);
+    }
+  };
+
+  // Host leaves the monitor and returns to the lobby. The session keeps running
+  // on the server and can be cleaned up from the admin dashboard.
+  const leaveHosting = () => {
+    setRoomId("");
+    setRoomData(null);
+    setPlayers([]);
+    setSessionTimeLeft(null);
+    setGameState("lobby");
+  };
+
+  const copyRoomCode = async () => {
+    try {
+      await navigator.clipboard.writeText(roomId);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    } catch {
+      // Clipboard may be unavailable; the code is shown on screen regardless.
     }
   };
 
   const handleSeedQuestions = async () => {
     if (!isAdmin) return;
     try {
-      const qRef = collection(db, "questions");
-      for (const q of CYBER_QUESTIONS) {
-        await setDoc(doc(qRef, q.id), q);
-      }
+      const reset = CYBER_QUESTIONS.map((q) => ({ ...q }));
+      await api.saveQuestions(reset);
+      setBankQuestions(reset);
     } catch (e) {
-      console.error("Error seeding questions:", e);
+      console.error("Error resetting questions:", e);
     }
   };
 
   const fetchMetricsAndAI = async () => {
     setMetricsLoading(true);
     try {
-      const qRef = collectionGroup(db, "players");
-      const qs = await getDocs(qRef);
-      const allPlayers: any[] = [];
-      qs.forEach((d) => allPlayers.push(d.data()));
-      
-      const totalStudents = allPlayers.length;
-      const averageScore = totalStudents ? Math.round(allPlayers.reduce((acc, p) => acc + (p.score || 0), 0) / totalStudents) : 0;
-      
-      let totalQuestionsAttempted = 0;
-      let totalCorrect = 0;
-      let diffStats: Record<string, {attempted: number, correct: number}> = {};
-      
-      allPlayers.forEach(p => {
-        if (p.history && Array.isArray(p.history)) {
-           p.history.forEach((h: any) => {
-              totalQuestionsAttempted++;
-              if (h.correct) totalCorrect++;
-              const d = h.question?.difficulty || 'unknown';
-              if (!diffStats[d]) diffStats[d] = { attempted: 0, correct: 0 };
-              diffStats[d].attempted++;
-              if (h.correct) diffStats[d].correct++;
-           });
-        }
-      });
-      
-      const studentsStats = allPlayers.map(p => {
-         let timeTaken = 0;
-         let wrongQuestions: any[] = [];
-         
-         if (p.history && Array.isArray(p.history)) {
-            p.history.forEach((h: any) => {
-               timeTaken += (h.timeTaken || 0);
-               if (!h.correct) {
-                  wrongQuestions.push(h.question?.question || 'Unknown Question');
-               }
-            });
-         }
-         return {
-            uid: p.id || p.uid || Math.random().toString(),
-            name: p.name || 'Anonymous',
-            score: p.score || 0,
-            completionTime: timeTaken,
-            wrongQuestions
-         }
-      });
-
-      const computedMetrics = {
-        totalStudents,
-        averageScore,
-        totalQuestionsAttempted,
-        totalCorrect,
-        accuracy: totalQuestionsAttempted ? Math.round((totalCorrect / totalQuestionsAttempted) * 100) : 0,
-        skillBreakdown: diffStats,
-        students: studentsStats
-      };
+      const computedMetrics = await api.getMetrics();
       setMetricsData(computedMetrics);
-      
       try {
-         const token = getInstructorToken();
-         if (!token) throw new Error("Not signed in as instructor");
-         const res = await fetch("/api/metrics/analyze", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({ metrics: computedMetrics })
-         });
-         const aiData = await res.json();
-         if (aiData.suggestions) {
-            setAiSuggestions(aiData.suggestions);
-         }
+        const aiData = await api.analyzeMetrics(computedMetrics);
+        if (aiData.suggestions) setAiSuggestions(aiData.suggestions);
       } catch (e) {
-         console.error("Failed to fetch AI suggestions:", e);
+        console.error("Failed to fetch AI suggestions:", e);
       }
     } catch (error) {
       console.error("Error fetching metrics:", error);
@@ -593,9 +491,14 @@ export default function App() {
     if (!isAdmin) return;
     try {
       if (!q.id) {
-         q.id = Math.random().toString(36).substring(2, 9);
+        q.id = Math.random().toString(36).substring(2, 9);
       }
-      await setDoc(doc(db, "questions", q.id), q);
+      const exists = bankQuestions.some((b) => b.id === q.id);
+      const next = exists
+        ? bankQuestions.map((b) => (b.id === q.id ? q : b))
+        : [...bankQuestions, q];
+      await api.saveQuestions(next);
+      setBankQuestions(next);
       setEditingQuestion(null);
     } catch (e) {
       console.error("Error saving question:", e);
@@ -605,7 +508,9 @@ export default function App() {
   const handleDeleteQuestion = async (id: string) => {
     if (!isAdmin) return;
     try {
-      await deleteDoc(doc(db, "questions", id));
+      const next = bankQuestions.filter((b) => b.id !== id);
+      await api.saveQuestions(next);
+      setBankQuestions(next);
     } catch (e) {
       console.error("Error deleting question:", e);
     }
@@ -619,13 +524,11 @@ export default function App() {
 
   const handleDeleteRoom = async (roomIdToDelete: string) => {
     if (!isAdmin) return;
-    
     try {
-      await deleteDoc(doc(db, "rooms", roomIdToDelete));
+      await api.deleteSession(roomIdToDelete);
       setAllRooms(prev => prev.filter(r => r.id !== roomIdToDelete));
     } catch (error) {
-       console.error("Failed to delete room:", error);
-       // Instead of window.alert which is also blocked, we just log it.
+       console.error("Failed to delete session:", error);
     }
   };
 
@@ -672,8 +575,11 @@ export default function App() {
     setRoomId("");
     setRoomData(null);
     if (user?.isAnonymous) {
-      // Guests have nowhere else to go — sign them out back to the home page
-      signOut(auth);
+      // Guests have nowhere else to go — drop them back to the home page
+      sessionStorage.removeItem(PLAYER_KEY);
+      playerInfoRef.current = null;
+      setUser(null);
+      setGameState("login");
     } else {
       setGameState(user ? "lobby" : "login");
     }
@@ -687,20 +593,12 @@ export default function App() {
   };
 
   const syncScoreAndHistory = async (newScore: number, history: any) => {
-    if (!user || !roomId) return;
-    const playerRef = doc(db, "rooms", roomId, "players", user.uid);
+    const info = playerInfoRef.current;
+    if (!info || !roomId) return;
     try {
-      await updateDoc(playerRef, {
-        score: newScore,
-        history,
-        updatedAt: serverTimestamp(),
-      });
+      await api.submitScore(roomId, info.id, info.token, newScore, history);
     } catch (error) {
-      handleFirestoreError(
-        error,
-        OperationType.UPDATE,
-        `rooms/${roomId}/players/${user.uid}`,
-      );
+      console.error("Failed to sync score:", error);
     }
   };
 
@@ -823,13 +721,13 @@ export default function App() {
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
-        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting")
+        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "hosting")
           ? "bg-slate-50 text-slate-900 overflow-y-auto"
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
     >
       {/* Animated Background */}
-      {gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && (
+      {gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
         <div className="fixed inset-0 z-0 pointer-events-none">
           {/* Animated Grid */}
           <div className="absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)]">
@@ -1034,12 +932,18 @@ export default function App() {
                           maxLength={6}
                           autoComplete="off"
                           value={guestRoomId}
-                          onChange={(e) =>
-                            setGuestRoomId(e.target.value.toUpperCase())
-                          }
+                          onChange={(e) => {
+                            setGuestRoomId(e.target.value.toUpperCase());
+                            if (joinError) setJoinError("");
+                          }}
                           className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-slate-900 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all font-mono font-medium tracking-[0.3em]"
                         />
                       </div>
+                      {joinError && (
+                        <p className="text-sm font-medium text-rose-600 text-center">
+                          {joinError}
+                        </p>
+                      )}
                       <motion.button
                         whileHover={{ scale: 1.01 }}
                         whileTap={{ scale: 0.99 }}
@@ -1314,7 +1218,7 @@ export default function App() {
                       Time per Question
                     </p>
                     <div className="flex bg-slate-100 rounded-2xl p-1.5 border border-slate-200">
-                      {[10, 20, 30, 60].map((time) => (
+                      {[10, 20, 30, 45, 60].map((time) => (
                         <button
                           key={time}
                           onClick={() => setTimePerQuestion(time)}
@@ -1333,79 +1237,39 @@ export default function App() {
                 </div>
               )}
 
-              {/* Main Action Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl px-4 auto-rows-fr mt-4">
-                {isAdmin ? (
-                  <motion.button
-                    whileHover={{ scale: 1.01, translateY: -2 }}
-                    whileTap={{ scale: 0.99 }}
-                    onClick={createRoom}
-                    className="group relative flex flex-col items-center justify-center p-8 bg-white border border-slate-200 rounded-3xl text-center space-y-4 hover:shadow-xl hover:border-blue-200 transition-all shadow-md shadow-slate-200/50"
-                  >
-                    <div className="p-5 bg-blue-50 text-blue-600 rounded-2xl group-hover:scale-110 group-hover:bg-blue-100 transition-all duration-300 mb-2">
-                      <ShieldCheck className="w-8 h-8" />
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-bold text-slate-900 mb-1">
-                        Host New Session
-                      </h3>
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                        Generate Assessment Code
-                      </p>
-                    </div>
-                    <div className="absolute top-6 right-6 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Play className="w-5 h-5 text-blue-600 animate-pulse" />
-                    </div>
-                  </motion.button>
+              {/* Host Action */}
+              <div className="w-full max-w-2xl px-4 mt-4">
+                <motion.button
+                  whileHover={{ scale: 1.01, translateY: -2 }}
+                  whileTap={{ scale: 0.99 }}
+                  onClick={createRoom}
+                  className="group relative w-full flex flex-col md:flex-row items-center gap-6 p-8 md:p-10 bg-white border border-slate-200 rounded-3xl text-center md:text-left hover:shadow-xl hover:border-blue-200 transition-all shadow-md shadow-slate-200/50"
+                >
+                  <div className="p-5 bg-blue-50 text-blue-600 rounded-2xl group-hover:scale-110 group-hover:bg-blue-100 transition-all duration-300 shrink-0">
+                    <ShieldCheck className="w-8 h-8" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-2xl font-bold text-slate-900 mb-1">
+                      Host New Session
+                    </h3>
+                    <p className="text-sm text-slate-500">
+                      Generate a join code, share it with your students, and
+                      monitor the leaderboard live as they play.
+                    </p>
+                  </div>
+                  <div className="px-6 py-3 bg-blue-600 text-white font-bold rounded-xl flex items-center gap-2 shrink-0 group-hover:bg-blue-700 transition-colors">
+                    <Play className="w-5 h-5 fill-current" /> {isHosting ? "Starting..." : "Start"}
+                  </div>
+                </motion.button>
+                {hostError ? (
+                  <p className="text-center text-sm text-rose-600 mt-4 font-medium">
+                    {hostError}
+                  </p>
                 ) : (
-                  <div className="flex flex-col items-center justify-center p-8 bg-slate-50 border border-slate-200 rounded-3xl text-center space-y-4 opacity-75">
-                    <div className="p-5 bg-white rounded-2xl border border-slate-100 mb-2">
-                      <ShieldCheck className="w-8 h-8 text-slate-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-bold text-slate-500 mb-1">
-                        Host New Session
-                      </h3>
-                      <p className="text-xs font-semibold text-rose-500 uppercase tracking-wider mt-2">
-                        Requires Instructor Access
-                      </p>
-                    </div>
-                  </div>
+                  <p className="text-center text-xs text-slate-400 mt-4 font-medium">
+                    Students join from the home page using your session code.
+                  </p>
                 )}
-
-                <div className="flex flex-col justify-center p-8 bg-white border border-slate-200 rounded-3xl space-y-8 shadow-md shadow-slate-200/50">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
-                      <UserPlus className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-900">
-                        Join Assessment
-                      </h3>
-                      <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest mt-1">
-                        Enter instructor code
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-4">
-                    <input
-                      type="text"
-                      placeholder="Enter 6-digit code"
-                      value={roomId}
-                      onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-mono font-medium text-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all placeholder:text-slate-400"
-                    />
-                    <motion.button
-                      whileHover={{ scale: 1.01 }}
-                      whileTap={{ scale: 0.99 }}
-                      onClick={() => joinRoom(roomId)}
-                      className="w-full bg-blue-600 text-white font-bold px-8 py-4 rounded-2xl hover:bg-blue-700 transition-all shadow-md active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      Connect <ChevronRight className="w-5 h-5" />
-                    </motion.button>
-                  </div>
-                </div>
               </div>
 
               {/* Concept Info Footer Grid */}
@@ -1472,9 +1336,9 @@ export default function App() {
 
               <div className="bg-blue-50 border border-blue-200 p-8 rounded-3xl text-center space-y-4 shadow-sm shadow-blue-900/5">
                 <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider">
-                  Assessment Code
+                  You're in! Session Code
                 </p>
-                <h2 className="text-6xl md:text-8xl font-black font-mono tracking-tighter text-blue-700">
+                <h2 className="text-5xl md:text-7xl font-black font-mono tracking-tighter text-blue-700">
                   {roomId}
                 </h2>
                 <div className="flex justify-center mt-6">
@@ -1494,8 +1358,12 @@ export default function App() {
                     {difficultyFilter === "all" ? "MIXED" : difficultyFilter}
                   </span>
                 </div>
-                <p className="text-slate-500 text-base mt-6 font-medium">
-                  Share this code with the students to begin the learning module.
+                <p className="text-slate-500 text-base mt-6 font-medium flex items-center justify-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500" />
+                  </span>
+                  Waiting for your instructor to start the session...
                 </p>
               </div>
 
@@ -1503,10 +1371,10 @@ export default function App() {
                 <div className="flex items-center justify-between px-2">
                   <h3 className="flex items-center gap-2 font-bold text-lg text-slate-900">
                     <Users className="w-5 h-5 text-blue-600" />
-                    Students in Session
+                    In the Session
                   </h3>
                   <span className="text-xs font-semibold uppercase text-slate-500">
-                    {players.length} Enrolled
+                    {players.length} Joined
                   </span>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-4 overflow-y-auto pr-2 custom-scrollbar max-h-[40vh]">
@@ -1532,45 +1400,274 @@ export default function App() {
                   
                   {players.length === 0 && (
                     <div className="col-span-1 sm:col-span-2 p-10 text-center text-slate-500 border border-dashed border-slate-300 rounded-3xl bg-slate-50 mt-2">
-                       <p className="font-medium text-slate-600">Awaiting student connections...</p>
+                       <p className="font-medium text-slate-600">Waiting for classmates to join...</p>
                     </div>
                   )}
                 </div>
               </div>
+            </motion.div>
+          )}
 
-              {roomData?.hostId === user?.uid && (
-                <div className="space-y-6 pt-4">
-                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
-                    <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
-                      Module Time Limit
-                    </p>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {[1, 3, 5, 10, 15].map((min) => (
-                        <button
-                          key={min}
-                          onClick={() => setSessionDurationMinutes(min)}
-                          className={cn(
-                            "px-6 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
-                            sessionDurationMinutes === min
-                              ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
-                              : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
-                          )}
-                        >
-                          {min} min
-                        </button>
-                      ))}
+          {gameState === "hosting" && (
+            <motion.div
+              key="hosting"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex-1 flex flex-col space-y-8 relative max-w-4xl mx-auto w-full py-8 px-4"
+            >
+              {(() => {
+                const started = roomData?.status === "started";
+                const ended =
+                  roomData?.status === "finished" || sessionTimeLeft === 0;
+                const live = started && !ended;
+
+                return (
+                  <>
+                    {/* Header: code + controls */}
+                    <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm flex flex-col md:flex-row md:items-center gap-6">
+                      <div className="flex-1 text-center md:text-left">
+                        <p className="text-xs font-semibold text-blue-600 uppercase tracking-wider flex items-center justify-center md:justify-start gap-2">
+                          <Crown className="w-4 h-4" /> Hosting · Session Code
+                        </p>
+                        <div className="flex items-center justify-center md:justify-start gap-3 mt-2">
+                          <h2 className="text-5xl md:text-6xl font-black font-mono tracking-tighter text-slate-900">
+                            {roomId}
+                          </h2>
+                          <button
+                            onClick={copyRoomCode}
+                            title="Copy code"
+                            className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all"
+                          >
+                            {codeCopied ? (
+                              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                            ) : (
+                              <Copy className="w-5 h-5" />
+                            )}
+                          </button>
+                        </div>
+                        <p className="text-slate-500 text-sm mt-2 font-medium">
+                          {ended
+                            ? "Session ended — final results below."
+                            : live
+                              ? "Session live. Students are playing now."
+                              : "Share this code so students can join from the home page."}
+                        </p>
+                      </div>
+
+                      {live && sessionTimeLeft !== null && (
+                        <div className="flex flex-col items-center bg-slate-900 text-white rounded-2xl px-6 py-4 shrink-0">
+                          <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest">
+                            Time Left
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Timer className="w-5 h-5 text-emerald-400" />
+                            <span className="text-3xl font-bold font-mono">
+                              {Math.floor(sessionTimeLeft / 60)
+                                .toString()
+                                .padStart(2, "0")}
+                              :
+                              {(sessionTimeLeft % 60).toString().padStart(2, "0")}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  <motion.button
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    onClick={startRoomGame}
-                    className="w-full py-5 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-md active:scale-95 flex items-center justify-center gap-3 text-lg mt-4"
-                  >
-                    <Play className="w-5 h-5 fill-current" /> Begin Assessment Module
-                  </motion.button>
-                </div>
-              )}
+
+                    {/* Pre-start: session settings */}
+                    {!started && !ended && (
+                      <div className="grid sm:grid-cols-2 gap-4">
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
+                          <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
+                            Session Time Limit
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2">
+                            {[1, 3, 5, 10, 15].map((min) => (
+                              <button
+                                key={min}
+                                onClick={() => setSessionDurationMinutes(min)}
+                                className={cn(
+                                  "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
+                                  sessionDurationMinutes === min
+                                    ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
+                                    : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
+                                )}
+                              >
+                                {min} min
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 flex flex-col items-center gap-4 shadow-sm">
+                          <p className="text-xs font-bold text-slate-700 uppercase tracking-widest shrink-0">
+                            Time per Question
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2">
+                            {[10, 20, 30, 45, 60].map((time) => {
+                              const active = (roomData?.timePerQuestion ?? timePerQuestion) === time;
+                              return (
+                                <button
+                                  key={time}
+                                  onClick={() => updateTimePerQuestion(time)}
+                                  className={cn(
+                                    "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
+                                    active
+                                      ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700"
+                                      : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
+                                  )}
+                                >
+                                  {time}s
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Roster / live leaderboard */}
+                    <div className="flex-1 space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <h3 className="flex items-center gap-2 font-bold text-lg text-slate-900">
+                          {live || ended ? (
+                            <Trophy className="w-5 h-5 text-amber-500" />
+                          ) : (
+                            <Users className="w-5 h-5 text-blue-600" />
+                          )}
+                          {live || ended ? "Live Leaderboard" : "Students Joined"}
+                        </h3>
+                        <span className="text-xs font-semibold uppercase text-slate-500">
+                          {players.length}{" "}
+                          {live || ended ? "Playing" : "Joined"}
+                        </span>
+                      </div>
+
+                      {!started ? (
+                        <div className="grid sm:grid-cols-2 gap-4 overflow-y-auto pr-2 custom-scrollbar max-h-[40vh]">
+                          {players.map((p) => (
+                            <motion.div
+                              layout
+                              key={p.uid}
+                              initial={{ opacity: 0, x: -10 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              className="flex items-center gap-4 p-4 bg-white border border-slate-200 rounded-2xl shadow-sm"
+                            >
+                              <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center font-bold text-xl text-blue-600">
+                                {p.name.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="flex-1 truncate">
+                                <p className="font-bold text-slate-900 truncate text-lg">
+                                  {p.name}
+                                </p>
+                                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                                  Connected
+                                </p>
+                              </div>
+                            </motion.div>
+                          ))}
+                          {players.length === 0 && (
+                            <div className="col-span-1 sm:col-span-2 p-10 text-center text-slate-500 border border-dashed border-slate-300 rounded-3xl bg-slate-50 mt-2">
+                              <p className="font-medium text-slate-600">
+                                Awaiting student connections...
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar max-h-[45vh]">
+                          {players.map((p, idx) => (
+                            <motion.div
+                              layout
+                              key={p.uid}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              className={cn(
+                                "flex items-center gap-4 p-4 rounded-2xl border shadow-sm",
+                                idx === 0
+                                  ? "bg-amber-50 border-amber-200"
+                                  : "bg-white border-slate-200",
+                              )}
+                            >
+                              <div
+                                className={cn(
+                                  "w-10 h-10 rounded-xl flex items-center justify-center font-black text-lg shrink-0",
+                                  idx === 0
+                                    ? "bg-amber-400 text-white"
+                                    : "bg-slate-100 text-slate-500",
+                                )}
+                              >
+                                {idx + 1}
+                              </div>
+                              <p className="flex-1 font-bold text-slate-900 truncate text-lg">
+                                {p.name}
+                              </p>
+                              <p className="font-mono font-bold text-xl text-slate-900">
+                                {p.score.toLocaleString()}
+                              </p>
+                            </motion.div>
+                          ))}
+                          {players.length === 0 && (
+                            <div className="p-10 text-center text-slate-500 border border-dashed border-slate-300 rounded-3xl bg-slate-50">
+                              <p className="font-medium text-slate-600">
+                                No students are playing this session.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="space-y-3 pt-2">
+                      {!started && !ended && (
+                        <motion.button
+                          whileHover={{ scale: 1.01 }}
+                          whileTap={{ scale: 0.99 }}
+                          onClick={startRoomGame}
+                          disabled={players.length === 0}
+                          className="w-full py-5 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-md active:scale-95 flex items-center justify-center gap-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Play className="w-5 h-5 fill-current" />
+                          {players.length === 0
+                            ? "Waiting for students to join"
+                            : `Begin Session (${players.length} ready)`}
+                        </motion.button>
+                      )}
+
+                      {live && (
+                        <motion.button
+                          whileHover={{ scale: 1.01 }}
+                          whileTap={{ scale: 0.99 }}
+                          onClick={endRoomGame}
+                          className="w-full py-4 bg-rose-50 text-rose-600 border border-rose-200 font-bold rounded-2xl hover:bg-rose-100 transition-all flex items-center justify-center gap-2"
+                        >
+                          End Session Now
+                        </motion.button>
+                      )}
+
+                      {ended && (
+                        <motion.button
+                          whileHover={{ scale: 1.01 }}
+                          whileTap={{ scale: 0.99 }}
+                          onClick={leaveHosting}
+                          className="w-full py-5 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 text-lg"
+                        >
+                          Back to Lobby <ChevronRight className="w-5 h-5" />
+                        </motion.button>
+                      )}
+
+                      {!ended && (
+                        <button
+                          onClick={leaveHosting}
+                          className="w-full py-3 text-slate-500 hover:text-slate-800 font-semibold text-sm transition-colors"
+                        >
+                          {live ? "Leave monitor (session keeps running)" : "Cancel session"}
+                        </button>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </motion.div>
           )}
 

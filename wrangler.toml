@@ -1,0 +1,31 @@
+name = "ready-force-labs"
+main = "src/worker/index.ts"
+compatibility_date = "2024-11-06"
+
+# Serve the built client (dist/) as static assets. The Worker is invoked for
+# requests that don't match an asset — i.e. /api/* — and falls back to ASSETS
+# for everything else.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+# Durable Objects hold live session state (one RoomDO per room) plus a single
+# GlobalDO for the question bank, login rate limiting, and the room registry.
+# Defined in this same Worker (allowed for Workers; Pages cannot host DOs).
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "RoomDO"
+
+[[durable_objects.bindings]]
+name = "GLOBAL"
+class_name = "GlobalDO"
+
+# SQLite-backed Durable Objects work on the Workers Free plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RoomDO", "GlobalDO"]
+
+# Set APP_PASSWORD and GEMINI_API_KEY as secrets:
+#   npx wrangler secret put APP_PASSWORD
+#   npx wrangler secret put GEMINI_API_KEY
+# (or in the dashboard under the Worker's Settings → Variables).

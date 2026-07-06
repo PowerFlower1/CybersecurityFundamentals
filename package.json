@@ -6,14 +6,15 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:cf": "vite build",
+    "deploy:cf": "wrangler deploy",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "start": "node dist/server.cjs",
-    "deploy:rules": "npx --yes firebase-tools deploy --only firestore:rules"
+    "lint:worker": "tsc -p tsconfig.worker.json --noEmit",
+    "start": "node dist/server.cjs"
   },
   "dependencies": {
-    "@firebase/eslint-plugin-security-rules": "^0.0.2",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/canvas-confetti": "^1.9.0",
@@ -22,8 +23,8 @@
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "firebase": "^12.12.1",
     "helmet": "^8.2.0",
+    "hono": "^4.12.26",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
@@ -33,6 +34,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260621.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
