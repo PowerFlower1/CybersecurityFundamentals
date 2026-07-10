@@ -17,7 +17,7 @@ commits it, and checks the box. It stops when every box is checked.
   `RoomDO` (create → join → start → score → anti-cheat rejects a lower score
   or wrong player token → end) and `GlobalDO` (question bank get/set, rate
   limiter allows N then blocks, room registry add/remove/list).
-- [ ] **Integration test the Node server API.** Spawn `server.ts` (via `tsx`)
+- [x] **Integration test the Node server API.** Spawn `server.ts` (via `tsx`)
   as a child process on a test port, then black-box test with `fetch`: login
   (wrong password → 401, right password → token, 6th attempt in a minute →
   429), session create/join/start/score/end, and that instructor-only routes
