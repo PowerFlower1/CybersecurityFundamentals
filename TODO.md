@@ -12,7 +12,7 @@ commits it, and checks the box. It stops when every box is checked.
 - [x] **Unit test `src/worker/auth.ts`.** Cover `createToken` /
   `verifyToken` (valid token accepted, tampered signature rejected, expired
   token rejected) and `passwordMatches` (correct vs. incorrect password).
-- [ ] **Unit test the Durable Objects.** Write a minimal in-memory fake of
+- [x] **Unit test the Durable Objects.** Write a minimal in-memory fake of
   `DurableObjectState.storage` (get/put/delete on a Map) and use it to test
   `RoomDO` (create → join → start → score → anti-cheat rejects a lower score
   or wrong player token → end) and `GlobalDO` (question bank get/set, rate
