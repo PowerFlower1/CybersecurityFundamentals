@@ -27,7 +27,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   sorted most-missed first. Render a "Most missed questions" table in the admin
   metrics tab. Add tests for the aggregation.
 
-- [ ] **Accessibility pass.** Currently zero `prefers-reduced-motion` handling,
+- [x] **Accessibility pass.** Currently zero `prefers-reduced-motion` handling,
   one `aria-label`, and no `aria-live` regions. (1) Respect reduced motion —
   gate the decorative background animations and screen transitions behind
   framer-motion's `useReducedMotion()`. (2) Add an `aria-live="polite"` region

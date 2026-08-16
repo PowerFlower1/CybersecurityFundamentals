@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useReducedMotion, MotionConfig } from "motion/react";
 import {
   Shield,
   ShieldAlert,
@@ -73,6 +73,10 @@ interface PlayerData {
 }
 
 export default function App() {
+  // Honour the OS "reduce motion" setting: suppresses decorative animation,
+  // confetti, and screen-transition movement for users who get motion sickness
+  // or find animation distracting.
+  const prefersReducedMotion = useReducedMotion();
   const [user, setUser] = useState<SessionUser | null>(null);
   const playerInfoRef = useRef<{ code: string; id: string; token: string; name: string } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -622,18 +626,23 @@ export default function App() {
     if (showExplanation) return;
     const correct =
       answer.toLowerCase() === currentQuestion.correctAnswer.toLowerCase();
+    // Record the choice so the results view can highlight which option the
+    // learner actually picked alongside the correct one.
+    setUserAnswer(answer);
     setIsCorrect(correct);
     let newScore = score;
     if (correct) {
       audio.playCorrect();
       newScore = score + 100 + timeLeft * 5;
       setScore(newScore);
-      confetti({
-        particleCount: 50,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ["#22c55e", "#ffffff"],
-      });
+      if (!prefersReducedMotion) {
+        confetti({
+          particleCount: 50,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ["#22c55e", "#ffffff"],
+        });
+      }
     } else {
       audio.playIncorrect();
     }
@@ -656,11 +665,13 @@ export default function App() {
     } else {
       setGameState("results");
       audio.playEnd();
-      confetti({
-        particleCount: 150,
-        spread: 120,
-        origin: { y: 0.5 },
-      });
+      if (!prefersReducedMotion) {
+        confetti({
+          particleCount: 150,
+          spread: 120,
+          origin: { y: 0.5 },
+        });
+      }
     }
   };
 
@@ -715,6 +726,9 @@ export default function App() {
   }, [gameState, accuracy, activeCampaignConcept]);
 
   return (
+    // reducedMotion="user" makes every motion component below respect the OS
+    // setting, so screen transitions become instant instead of animated.
+    <MotionConfig reducedMotion="user">
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
@@ -723,8 +737,9 @@ export default function App() {
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
     >
-      {/* Animated Background */}
-      {gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
+      {/* Animated Background — purely decorative, so it is dropped entirely
+          when the user has asked for reduced motion. */}
+      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
         <div className="fixed inset-0 z-0 pointer-events-none">
           {/* Animated Grid */}
           <div className="absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)]">
@@ -1143,6 +1158,7 @@ export default function App() {
                   onClick={handleSignOut}
                   className="p-2.5 bg-white hover:bg-rose-50 rounded-full text-slate-500 hover:text-rose-500 transition-all border border-slate-200 shadow-sm"
                   title="Sign Out"
+                  aria-label="Sign out"
                 >
                   <LogOut className="w-5 h-5" />
                 </motion.button>
@@ -1433,6 +1449,7 @@ export default function App() {
                           <button
                             onClick={copyRoomCode}
                             title="Copy code"
+                            aria-label={codeCopied ? "Session code copied" : "Copy session code"}
                             className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all"
                           >
                             {codeCopied ? (
@@ -1864,26 +1881,29 @@ export default function App() {
                           key={idx}
                           disabled={showExplanation}
                           onClick={() => handleAnswerSubmit(option)}
-                          whileHover={!showExplanation ? { scale: 1.02 } : {}}
-                          whileTap={!showExplanation ? { scale: 0.98 } : {}}
+                          whileHover={!showExplanation && !prefersReducedMotion ? { scale: 1.02 } : {}}
+                          whileTap={!showExplanation && !prefersReducedMotion ? { scale: 0.98 } : {}}
                           animate={
-                            showExplanation &&
-                            option === currentQuestion.correctAnswer
-                              ? {
-                                  scale: [1, 1.05, 1],
-                                  transition: { duration: 0.3 },
-                                }
+                            prefersReducedMotion
+                              ? {}
                               : showExplanation &&
-                                  isCorrect === false &&
-                                  userAnswer === option
+                                  option === currentQuestion.correctAnswer
                                 ? {
-                                    x: [-10, 10, -10, 10, 0],
-                                    transition: { duration: 0.4 },
+                                    scale: [1, 1.05, 1],
+                                    transition: { duration: 0.3 },
                                   }
-                                : {}
+                                : showExplanation &&
+                                    isCorrect === false &&
+                                    userAnswer === option
+                                  ? {
+                                      x: [-10, 10, -10, 10, 0],
+                                      transition: { duration: 0.4 },
+                                    }
+                                  : {}
                           }
                           className={cn(
                             "group relative p-5 bg-white/5 border border-white/10 text-left rounded-2xl transition-colors",
+                            "focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]",
                             !showExplanation
                               ? "hover:border-emerald-500/50 hover:bg-emerald-500/5"
                               : option === currentQuestion.correctAnswer
@@ -1894,10 +1914,29 @@ export default function App() {
                           )}
                         >
                           <span className="font-medium">{option}</span>
+                          {showExplanation && (
+                            <span className="sr-only">
+                              {option === currentQuestion.correctAnswer
+                                ? " — correct answer"
+                                : userAnswer === option
+                                  ? " — your answer, incorrect"
+                                  : ""}
+                            </span>
+                          )}
                         </motion.button>
                       ))}
                   </div>
                 </motion.div>
+              </div>
+
+              {/* Screen-reader announcement of the result. Visually hidden
+                  because the same information is conveyed on screen. */}
+              <div className="sr-only" role="status" aria-live="polite">
+                {showExplanation
+                  ? isCorrect
+                    ? `Correct. Your score is now ${score}.`
+                    : `Incorrect. The correct answer is: ${currentQuestion.correctAnswer}. Your score is ${score}.`
+                  : ""}
               </div>
 
               <AnimatePresence>
@@ -2246,6 +2285,7 @@ export default function App() {
                         onClick={() => handleDeleteRoom(room.id)}
                         className="p-2.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all"
                         title="Delete Session"
+                        aria-label={`Delete session ${room.id}`}
                       >
                         <Trash2 className="w-5 h-5" />
                       </motion.button>
@@ -2588,5 +2628,6 @@ export default function App() {
         SESSION ID: {roomId || "SECURE"} // ENCRYPTION: AES-256
       </footer>
     </div>
+    </MotionConfig>
   );
 }
