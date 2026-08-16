@@ -42,6 +42,7 @@ import {
   nextConceptId,
   CAMPAIGN_PASS_THRESHOLD,
 } from "./lib/campaign";
+import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
   api,
@@ -2083,6 +2084,25 @@ export default function App() {
                         >
                           {currentQuestion.explanation}
                         </motion.p>
+                        {/* Framework alignment — shows learners that this maps
+                            to recognised industry standards. */}
+                        {(() => {
+                          const s = standardsFor(currentQuestion);
+                          const tags = [...(s.securityPlus ?? []), ...(s.nice ?? [])];
+                          if (tags.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] font-semibold text-slate-400"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <motion.button
@@ -2652,6 +2672,51 @@ export default function App() {
                          </div>
                        </div>
                        
+                       {/* Curriculum coverage — what a district or funder asks for. */}
+                       <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800">Standards Coverage</h3>
+                            <p className="text-sm text-slate-500">
+                              Framework alignment of the {bankQuestions.length}-question bank, at domain level.
+                            </p>
+                          </div>
+                          {(() => {
+                            const coverage = standardsCoverage(bankQuestions);
+                            const groups = [
+                              { label: "CompTIA Security+ (SY0-701)", rows: coverage.securityPlus },
+                              { label: "NICE Framework", rows: coverage.nice },
+                            ];
+                            return (
+                              <div className="grid md:grid-cols-2 gap-6">
+                                {groups.map((g) => (
+                                  <div key={g.label} className="space-y-2">
+                                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                                      {g.label}
+                                    </p>
+                                    {g.rows.length === 0 ? (
+                                      <p className="text-sm text-slate-400">No alignment recorded.</p>
+                                    ) : (
+                                      <ul className="space-y-2">
+                                        {g.rows.map((r) => (
+                                          <li
+                                            key={r.standard}
+                                            className="flex items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl"
+                                          >
+                                            <span className="text-sm text-slate-700">{r.standard}</span>
+                                            <span className="text-xs font-mono font-bold text-slate-500 whitespace-nowrap">
+                                              {r.questionCount} q
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                       </div>
+
                        <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
                           <div>
                             <h3 className="text-lg font-bold text-slate-800">Most Missed Questions</h3>

@@ -60,7 +60,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   fix the resulting errors, and confirm `npm test` still passes. Expect a
   meaningful number of null-check errors given the app's `any`-typed state.
 
-- [ ] **Standards alignment tags (NICE / Security+).** Add an optional
+- [x] **Standards alignment tags (NICE / Security+).** Add an optional
   `standards` field to `Question` (e.g. `{ nice?: string[]; securityPlus?: string[] }`),
   populate it for the existing bank, display the tags on the explanation screen,
   and add a coverage summary to the admin metrics tab so coverage can be
