@@ -2491,6 +2491,54 @@ export default function App() {
                        </div>
                        
                        <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800">Most Missed Questions</h3>
+                            <p className="text-sm text-slate-500">Where the class struggled most — start reteaching here.</p>
+                          </div>
+                          {metricsData.questionStats?.length ? (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="text-left text-[11px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                                    <th scope="col" className="py-2 pr-4">Question</th>
+                                    <th scope="col" className="py-2 px-4 whitespace-nowrap">Concept</th>
+                                    <th scope="col" className="py-2 px-4 text-right whitespace-nowrap">Correct</th>
+                                    <th scope="col" className="py-2 pl-4 text-right whitespace-nowrap">Missed</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {metricsData.questionStats.map((q: any) => (
+                                    <tr key={q.id} className="border-b border-slate-100 last:border-0">
+                                      <td className="py-3 pr-4 text-slate-800 max-w-md">{q.question}</td>
+                                      <td className="py-3 px-4 whitespace-nowrap">
+                                        <span className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold">
+                                          {String(q.concept).replace(/_/g, " ")}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 px-4 text-right font-mono text-slate-600 whitespace-nowrap">
+                                        {q.correct}/{q.attempted}
+                                      </td>
+                                      <td className="py-3 pl-4 text-right whitespace-nowrap">
+                                        <span className={cn(
+                                          "font-bold font-mono",
+                                          q.percentMissed >= 50 ? "text-rose-600"
+                                            : q.percentMissed >= 25 ? "text-amber-600"
+                                            : "text-emerald-600",
+                                        )}>
+                                          {q.percentMissed}%
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-slate-500 text-sm">No question data yet — results appear once students have answered.</p>
+                          )}
+                       </div>
+
+                       <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
                           <h3 className="text-lg font-bold text-slate-800">Student Profiles & Assessment Logs</h3>
                           <div className="grid gap-4">
                             {metricsData.students?.map((s: any) => (

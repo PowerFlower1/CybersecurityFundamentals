@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { CYBER_QUESTIONS, type Question } from "./src/constants";
+import { computeMetrics } from "./src/lib/metrics";
 
 // ---------------------------------------------------------------------------
 // Auth: a single shared instructor password, exchanged for a signed token.
@@ -305,39 +306,7 @@ async function startServer() {
   app.get("/api/metrics", (req, res) => {
     if (!requireInstructor(req, res)) return;
     const allPlayers = [...rooms.values()].flatMap((r) => [...r.players.values()]);
-    const totalStudents = allPlayers.length;
-    const averageScore = totalStudents
-      ? Math.round(allPlayers.reduce((acc, p) => acc + (p.score || 0), 0) / totalStudents)
-      : 0;
-    let totalQuestionsAttempted = 0;
-    let totalCorrect = 0;
-    const diffStats: Record<string, { attempted: number; correct: number }> = {};
-    const students = allPlayers.map((p) => {
-      let timeTaken = 0;
-      const wrongQuestions: string[] = [];
-      for (const h of p.history) {
-        totalQuestionsAttempted++;
-        if (h.correct) totalCorrect++;
-        const d = h.question?.difficulty || "unknown";
-        diffStats[d] = diffStats[d] || { attempted: 0, correct: 0 };
-        diffStats[d].attempted++;
-        if (h.correct) diffStats[d].correct++;
-        timeTaken += h.timeTaken || 0;
-        if (!h.correct) wrongQuestions.push(h.question?.question || "Unknown Question");
-      }
-      return { uid: p.id, name: p.name, score: p.score, completionTime: timeTaken, wrongQuestions };
-    });
-    res.json({
-      totalStudents,
-      averageScore,
-      totalQuestionsAttempted,
-      totalCorrect,
-      accuracy: totalQuestionsAttempted
-        ? Math.round((totalCorrect / totalQuestionsAttempted) * 100)
-        : 0,
-      skillBreakdown: diffStats,
-      students,
-    });
+    res.json(computeMetrics(allPlayers));
   });
 
   app.post("/api/metrics/analyze", async (req, res) => {

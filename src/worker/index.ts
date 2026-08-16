@@ -7,6 +7,7 @@ import { Hono } from "hono";
 import { RoomDO } from "./room-do";
 import { GlobalDO } from "./global-do";
 import { createToken, verifyToken, passwordMatches } from "./auth";
+import { computeMetrics } from "../lib/metrics";
 
 export interface Env {
   ASSETS: Fetcher;
@@ -161,38 +162,7 @@ api.get("/metrics", async (c) => {
     }
   }
 
-  const totalStudents = allPlayers.length;
-  const averageScore = totalStudents
-    ? Math.round(allPlayers.reduce((acc, p) => acc + (p.score || 0), 0) / totalStudents)
-    : 0;
-  let totalQuestionsAttempted = 0;
-  let totalCorrect = 0;
-  const diffStats: Record<string, { attempted: number; correct: number }> = {};
-  const students = allPlayers.map((p) => {
-    let timeTaken = 0;
-    const wrongQuestions: string[] = [];
-    for (const h of p.history || []) {
-      totalQuestionsAttempted++;
-      if (h.correct) totalCorrect++;
-      const d = h.question?.difficulty || "unknown";
-      diffStats[d] = diffStats[d] || { attempted: 0, correct: 0 };
-      diffStats[d].attempted++;
-      if (h.correct) diffStats[d].correct++;
-      timeTaken += h.timeTaken || 0;
-      if (!h.correct) wrongQuestions.push(h.question?.question || "Unknown Question");
-    }
-    return { uid: p.id, name: p.name, score: p.score, completionTime: timeTaken, wrongQuestions };
-  });
-
-  return c.json({
-    totalStudents,
-    averageScore,
-    totalQuestionsAttempted,
-    totalCorrect,
-    accuracy: totalQuestionsAttempted ? Math.round((totalCorrect / totalQuestionsAttempted) * 100) : 0,
-    skillBreakdown: diffStats,
-    students,
-  });
+  return c.json(computeMetrics(allPlayers));
 });
 
 api.post("/metrics/analyze", async (c) => {

@@ -19,7 +19,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   only its own questions, and that adding a 4th question to one concept does
   not change what any other concept serves.
 
-- [ ] **Per-question item analysis for instructors.** The "Check on Learning"
+- [x] **Per-question item analysis for instructors.** The "Check on Learning"
   view a teacher actually needs — which questions the class missed — does not
   exist. Extend `GET /api/metrics` in both `server.ts` and
   `src/worker/index.ts` to return a `questionStats` array (question id, text,
