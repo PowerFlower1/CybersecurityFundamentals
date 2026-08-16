@@ -99,6 +99,34 @@ describe("RoomDO", () => {
     expect(blocked.status).toBe(409);
   });
 
+  it("supports the untimed accommodation at create and via settings", async () => {
+    const room = new RoomDO(fakeState());
+
+    // Created untimed — must not be coerced back to the 20s default.
+    await room.fetch(req("create", { code: "X", timePerQuestion: 0 }));
+    let state: any = await (await room.fetch(req("state"))).json();
+    expect(state.timePerQuestion).toBe(0);
+
+    // Switching to a timed value works...
+    await room.fetch(req("settings", { timePerQuestion: 30 }));
+    state = await (await room.fetch(req("state"))).json();
+    expect(state.timePerQuestion).toBe(30);
+
+    // ...and switching back to untimed also works.
+    await room.fetch(req("settings", { timePerQuestion: 0 }));
+    state = await (await room.fetch(req("state"))).json();
+    expect(state.timePerQuestion).toBe(0);
+  });
+
+  it("leaves an untimed setting alone when other settings change", async () => {
+    const room = new RoomDO(fakeState());
+    await room.fetch(req("create", { code: "X", timePerQuestion: 0 }));
+    await room.fetch(req("settings", { difficulty: "hard" }));
+    const state: any = await (await room.fetch(req("state"))).json();
+    expect(state.difficulty).toBe("hard");
+    expect(state.timePerQuestion).toBe(0);
+  });
+
   it("clamps the session duration to 1-120 minutes", async () => {
     const room = new RoomDO(fakeState());
     await room.fetch(req("create", { code: "X" }));

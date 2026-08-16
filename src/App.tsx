@@ -139,6 +139,12 @@ export default function App() {
   const [numberOfQuestions, setNumberOfQuestions] = useState<number>(10);
   const [timePerQuestion, setTimePerQuestion] = useState<number>(20);
 
+  // A per-question limit of 0 means "untimed" — the extended-time
+  // accommodation. Note the `??`: `||` would treat 0 as missing and silently
+  // fall back to a timed value.
+  const activeTimePerQuestion = roomData?.timePerQuestion ?? timePerQuestion;
+  const isUntimed = activeTimePerQuestion === 0;
+
   const filteredQuestions = useMemo(() => {
     if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
       const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
@@ -587,7 +593,7 @@ export default function App() {
   };
 
   const resetQuestionState = () => {
-    setTimeLeft(roomData?.timePerQuestion || timePerQuestion);
+    setTimeLeft(activeTimePerQuestion);
     setUserAnswer("");
     setShowExplanation(false);
     setIsCorrect(null);
@@ -604,7 +610,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (gameState === "playing" && !showExplanation) {
+    // Untimed sessions never count down and never auto-submit, so learners
+    // who need extended time can work at their own pace.
+    if (gameState === "playing" && !showExplanation && !isUntimed) {
       if (timeLeft > 0) {
         timerRef.current = setTimeout(() => {
           if (timeLeft <= 6) {
@@ -620,7 +628,7 @@ export default function App() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [timeLeft, gameState, showExplanation]);
+  }, [timeLeft, gameState, showExplanation, isUntimed]);
 
   const handleAnswerSubmit = (answer: string) => {
     if (showExplanation) return;
@@ -633,7 +641,9 @@ export default function App() {
     let newScore = score;
     if (correct) {
       audio.playCorrect();
-      newScore = score + 100 + timeLeft * 5;
+      // Untimed sessions award the base points only — there is no clock to
+      // race, so a speed bonus would penalise the accommodation.
+      newScore = score + 100 + (isUntimed ? 0 : timeLeft * 5);
       setScore(newScore);
       if (!prefersReducedMotion) {
         confetti({
@@ -646,11 +656,11 @@ export default function App() {
     } else {
       audio.playIncorrect();
     }
-    const maxTime = roomData?.timePerQuestion || timePerQuestion;
     const newHistoryEntry = {
       question: currentQuestion,
       correct,
-      timeTaken: maxTime - Math.max(0, timeLeft),
+      // No meaningful elapsed time to report when the question is untimed.
+      timeTaken: isUntimed ? 0 : activeTimePerQuestion - Math.max(0, timeLeft),
     };
     const newHistory = [...gameHistory, newHistoryEntry];
     setGameHistory(newHistory);
@@ -1231,10 +1241,11 @@ export default function App() {
                       Time per Question
                     </p>
                     <div className="flex bg-slate-100 rounded-2xl p-1.5 border border-slate-200">
-                      {[10, 20, 30, 45, 60].map((time) => (
+                      {[10, 20, 30, 45, 60, 0].map((time) => (
                         <button
                           key={time}
                           onClick={() => setTimePerQuestion(time)}
+                          title={time === 0 ? "No time limit — accessibility accommodation" : undefined}
                           className={cn(
                             "px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
                             timePerQuestion === time
@@ -1242,7 +1253,7 @@ export default function App() {
                               : "text-slate-500 hover:text-slate-800",
                           )}
                         >
-                          {time}s
+                          {time === 0 ? "Untimed" : `${time}s`}
                         </button>
                       ))}
                     </div>
@@ -1517,12 +1528,13 @@ export default function App() {
                             Time per Question
                           </p>
                           <div className="flex flex-wrap justify-center gap-2">
-                            {[10, 20, 30, 45, 60].map((time) => {
-                              const active = (roomData?.timePerQuestion ?? timePerQuestion) === time;
+                            {[10, 20, 30, 45, 60, 0].map((time) => {
+                              const active = activeTimePerQuestion === time;
                               return (
                                 <button
                                   key={time}
                                   onClick={() => updateTimePerQuestion(time)}
+                                  title={time === 0 ? "No time limit — accessibility accommodation" : undefined}
                                   className={cn(
                                     "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
                                     active
@@ -1530,11 +1542,16 @@ export default function App() {
                                       : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
                                   )}
                                 >
-                                  {time}s
+                                  {time === 0 ? "Untimed" : `${time}s`}
                                 </button>
                               );
                             })}
                           </div>
+                          {isUntimed && (
+                            <p className="text-xs text-emerald-700 font-medium text-center">
+                              Students can take as long as they need on each question.
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1757,6 +1774,17 @@ export default function App() {
                     </div>
                   )}
 
+                  {isUntimed ? (
+                    <div
+                      className="relative w-12 h-12 flex items-center justify-center rounded-full border-2 border-emerald-500/40 bg-emerald-500/10"
+                      title="Untimed — take as long as you need"
+                    >
+                      <span className="text-xl font-bold text-emerald-400" aria-hidden="true">
+                        ∞
+                      </span>
+                      <span className="sr-only">Untimed question — no time limit</span>
+                    </div>
+                  ) : (
                   <div className="relative w-12 h-12 flex items-center justify-center">
                     <svg className="w-full h-full -rotate-90">
                       <circle
@@ -1784,9 +1812,7 @@ export default function App() {
                         animate={{
                           strokeDashoffset:
                             125.6 *
-                            (1 -
-                              Math.max(0, timeLeft) /
-                                (roomData?.timePerQuestion || timePerQuestion)),
+                            (1 - Math.max(0, timeLeft) / activeTimePerQuestion),
                         }}
                       />
                     </svg>
@@ -1803,6 +1829,7 @@ export default function App() {
                       {timeLeft}
                     </span>
                   </div>
+                  )}
                 </div>
 
                 <div className="text-right">

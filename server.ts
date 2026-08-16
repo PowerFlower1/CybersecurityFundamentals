@@ -6,6 +6,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { CYBER_QUESTIONS, type Question } from "./src/constants";
 import { computeMetrics } from "./src/lib/metrics";
+import { normalizeTimePerQuestion } from "./src/lib/session-settings";
 
 // ---------------------------------------------------------------------------
 // Auth: a single shared instructor password, exchanged for a signed token.
@@ -195,7 +196,7 @@ async function startServer() {
       status: "waiting",
       difficulty: ["all", "easy", "medium", "hard"].includes(difficulty) ? difficulty : "all",
       questionCount: Number(questionCount) || 10,
-      timePerQuestion: Number(timePerQuestion) || 20,
+      timePerQuestion: normalizeTimePerQuestion(timePerQuestion),
       endTime: 0,
       hostName: typeof hostName === "string" && hostName ? hostName.slice(0, 50) : "Instructor",
       createdAt: Date.now(),
@@ -254,7 +255,10 @@ async function startServer() {
     const { difficulty, questionCount, timePerQuestion } = req.body ?? {};
     if (["all", "easy", "medium", "hard"].includes(difficulty)) room.difficulty = difficulty;
     if (Number(questionCount) > 0) room.questionCount = Number(questionCount);
-    if (Number(timePerQuestion) > 0) room.timePerQuestion = Number(timePerQuestion);
+    // 0 is valid here — it selects the untimed accommodation.
+    if (timePerQuestion !== undefined) {
+      room.timePerQuestion = normalizeTimePerQuestion(timePerQuestion, room.timePerQuestion);
+    }
     res.json(publicRoom(room));
   });
 

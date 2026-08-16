@@ -224,6 +224,39 @@ describe("session lifecycle", () => {
     expect(goneRes.status).toBe(404);
   }, 15_000);
 
+  it("preserves the untimed accommodation through create and settings", async () => {
+    const { token } = (await (await login("10.0.0.5")).json()) as { token: string };
+
+    // Created untimed.
+    const { code } = (await (
+      await fetch(`${BASE}/api/session`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ timePerQuestion: 0 }),
+      })
+    ).json()) as { code: string };
+
+    let room: any = await (await fetch(`${BASE}/api/session/${code}`)).json();
+    expect(room.timePerQuestion).toBe(0);
+
+    // Host switches to untimed on an existing timed session.
+    const { code: code2 } = (await (
+      await fetch(`${BASE}/api/session`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ timePerQuestion: 30 }),
+      })
+    ).json()) as { code: string };
+
+    await fetch(`${BASE}/api/session/${code2}/settings`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ timePerQuestion: 0 }),
+    });
+    room = await (await fetch(`${BASE}/api/session/${code2}`)).json();
+    expect(room.timePerQuestion).toBe(0);
+  }, 15_000);
+
   it("returns 404 for a nonexistent session code", async () => {
     const getRes = await fetch(`${BASE}/api/session/ZZZZZZ`);
     expect(getRes.status).toBe(404);

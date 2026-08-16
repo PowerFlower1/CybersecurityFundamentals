@@ -1,5 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { normalizeTimePerQuestion } from "../lib/session-settings";
+
 // One Durable Object instance per room code. Holds the live session state that
 // the in-memory Map held in the Node server — but durably and consistently,
 // which is what makes this work on Cloudflare's serverless runtime.
@@ -61,7 +63,7 @@ export class RoomDO {
         status: "waiting",
         difficulty: ["all", "easy", "medium", "hard"].includes(body.difficulty) ? body.difficulty : "all",
         questionCount: Number(body.questionCount) || 10,
-        timePerQuestion: Number(body.timePerQuestion) || 20,
+        timePerQuestion: normalizeTimePerQuestion(body.timePerQuestion),
         endTime: 0,
         hostName: typeof body.hostName === "string" && body.hostName ? body.hostName.slice(0, 50) : "Instructor",
         createdAt: Date.now(),
@@ -96,7 +98,10 @@ export class RoomDO {
         }
         if (["all", "easy", "medium", "hard"].includes(body.difficulty)) r.difficulty = body.difficulty;
         if (Number(body.questionCount) > 0) r.questionCount = Number(body.questionCount);
-        if (Number(body.timePerQuestion) > 0) r.timePerQuestion = Number(body.timePerQuestion);
+        // 0 is valid here — it selects the untimed accommodation.
+        if (body.timePerQuestion !== undefined) {
+          r.timePerQuestion = normalizeTimePerQuestion(body.timePerQuestion, r.timePerQuestion);
+        }
         await this.save(r);
         return json(publicRoom(r));
       }

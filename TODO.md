@@ -35,7 +35,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   `aria-label`s to icon-only buttons. (4) Ensure answer options are reachable
   and activatable by keyboard with a visible focus ring.
 
-- [ ] **Extended-time accommodation.** Time-per-question is a single global
+- [x] **Extended-time accommodation.** Time-per-question is a single global
   value, so there is no IEP/504 accommodation path. Add an "Untimed" option to
   the host's Time per Question control (alongside 10/20/30/45/60s) that
   disables the per-question countdown for that session, and make the gameplay
