@@ -41,7 +41,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   disables the per-question countdown for that session, and make the gameplay
   timer and scoring handle the untimed case (award base points, no time bonus).
 
-- [ ] **CSV export of session results.** No export exists anywhere. Add a
+- [x] **CSV export of session results.** No export exists anywhere. Add a
   "Download CSV" button to the admin metrics tab that builds a CSV client-side
   (one row per student: name, score, questions attempted, correct, accuracy,
   time) and triggers a download via a Blob URL. No new server route needed.

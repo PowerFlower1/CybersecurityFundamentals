@@ -75,8 +75,26 @@ describe("computeMetrics — totals", () => {
       name: "Alice",
       score: 300,
       completionTime: 10,
+      attempted: 2,
+      correct: 1,
+      accuracy: 50,
       wrongQuestions: ["Question 2"],
     });
+  });
+
+  it("computes per-student accuracy, and 0 for a student with no answers", () => {
+    const players: MetricsPlayer[] = [
+      {
+        id: "p1",
+        name: "Alice",
+        score: 0,
+        history: [entry("1", true), entry("2", true), entry("3", false)],
+      },
+      { id: "p2", name: "Bob", score: 0, history: [] },
+    ];
+    const [alice, bob] = computeMetrics(players).students;
+    expect(alice).toMatchObject({ attempted: 3, correct: 2, accuracy: 67 });
+    expect(bob).toMatchObject({ attempted: 0, correct: 0, accuracy: 0 });
   });
 });
 

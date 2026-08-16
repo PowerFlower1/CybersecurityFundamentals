@@ -35,6 +35,7 @@ import { CYBER_QUESTIONS, type Question, type ConceptId } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
 import { selectConceptQuestions } from "./lib/questions";
+import { studentsToCsv, csvFilename } from "./lib/csv";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
   api,
@@ -453,6 +454,23 @@ export default function App() {
     setPlayers([]);
     setSessionTimeLeft(null);
     setGameState("lobby");
+  };
+
+  // Build the results CSV in the browser and hand it to the user as a
+  // download — no server round-trip needed, the data is already loaded.
+  const downloadResultsCsv = () => {
+    if (!metricsData?.students?.length) return;
+    const csv = studentsToCsv(metricsData.students);
+    // Prepend a BOM so Excel opens UTF-8 names (accents etc.) correctly.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = csvFilename();
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const copyRoomCode = async () => {
@@ -2606,7 +2624,17 @@ export default function App() {
                        </div>
 
                        <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
-                          <h3 className="text-lg font-bold text-slate-800">Student Profiles & Assessment Logs</h3>
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-lg font-bold text-slate-800">Student Profiles & Assessment Logs</h3>
+                            <button
+                              onClick={downloadResultsCsv}
+                              disabled={!metricsData.students?.length}
+                              title="Export results as a CSV for your gradebook"
+                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl transition-colors text-sm flex items-center gap-2"
+                            >
+                              Download CSV
+                            </button>
+                          </div>
                           <div className="grid gap-4">
                             {metricsData.students?.map((s: any) => (
                               <div key={s.uid} className="p-4 bg-slate-50 rounded-2xl flex flex-col md:flex-row gap-6 border border-slate-200">

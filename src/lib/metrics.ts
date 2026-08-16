@@ -38,6 +38,10 @@ export interface StudentStat {
   name: string;
   score: number;
   completionTime: number;
+  attempted: number;
+  correct: number;
+  /** 0-100, rounded. */
+  accuracy: number;
   wrongQuestions: string[];
 }
 
@@ -68,9 +72,13 @@ export function computeMetrics(players: MetricsPlayer[]): Metrics {
 
   const students: StudentStat[] = players.map((p) => {
     let completionTime = 0;
+    let attempted = 0;
+    let correct = 0;
     const wrongQuestions: string[] = [];
 
     for (const h of p.history ?? []) {
+      attempted++;
+      if (h.correct) correct++;
       totalQuestionsAttempted++;
       if (h.correct) totalCorrect++;
 
@@ -101,7 +109,16 @@ export function computeMetrics(players: MetricsPlayer[]): Metrics {
       if (h.correct) stat.correct++;
     }
 
-    return { uid: p.id, name: p.name, score: p.score, completionTime, wrongQuestions };
+    return {
+      uid: p.id,
+      name: p.name,
+      score: p.score,
+      completionTime,
+      attempted,
+      correct,
+      accuracy: attempted ? Math.round((correct / attempted) * 100) : 0,
+      wrongQuestions,
+    };
   });
 
   const questionStats = [...byQuestion.values()]
