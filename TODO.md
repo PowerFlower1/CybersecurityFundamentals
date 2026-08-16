@@ -46,7 +46,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   (one row per student: name, score, questions attempted, correct, accuracy,
   time) and triggers a download via a Blob URL. No new server route needed.
 
-- [ ] **Soften the campaign mastery gate.** `src/App.tsx` requires
+- [x] **Soften the campaign mastery gate.** `src/App.tsx` requires
   `accuracy === 100` to unlock the next concept, so one wrong answer out of
   three locks the learner out and forces a replay of the same items. Lower the
   unlock threshold to 80%, and on the results screen for a failed attempt,

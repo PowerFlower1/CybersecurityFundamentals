@@ -36,6 +36,12 @@ import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
 import { selectConceptQuestions } from "./lib/questions";
 import { studentsToCsv, csvFilename } from "./lib/csv";
+import {
+  hasPassedConcept,
+  getMissedQuestions,
+  nextConceptId,
+  CAMPAIGN_PASS_THRESHOLD,
+} from "./lib/campaign";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
   api,
@@ -125,6 +131,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [activeCampaignConcept, setActiveCampaignConcept] = useState<string | null>(null);
+  // When set, the next round replays only these (previously missed) questions.
+  const [retryQuestions, setRetryQuestions] = useState<Question[] | null>(null);
 
   useEffect(() => {
     localStorage.setItem("rfc_unlocked_concepts", JSON.stringify(unlockedConcepts));
@@ -147,6 +155,9 @@ export default function App() {
   const isUntimed = activeTimePerQuestion === 0;
 
   const filteredQuestions = useMemo(() => {
+    // A retry round replays only the questions the learner missed.
+    if (retryQuestions && retryQuestions.length > 0) return retryQuestions;
+
     if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
       const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
       if (conceptQuestions.length > 0) return conceptQuestions;
@@ -182,7 +193,19 @@ export default function App() {
     // Use room's question count if available, otherwise local config
     const targetCount = roomData?.questionCount || numberOfQuestions;
     return questions.slice(0, targetCount);
-  }, [difficultyFilter, roomId, roomData?.questionCount, numberOfQuestions, bankQuestions]);
+    // gameState and activeCampaignConcept are read above, so they must be
+    // dependencies — without them, selecting a campaign concept returned the
+    // previously memoised (non-campaign) question list.
+  }, [
+    difficultyFilter,
+    roomId,
+    roomData?.questionCount,
+    numberOfQuestions,
+    bankQuestions,
+    gameState,
+    activeCampaignConcept,
+    retryQuestions,
+  ]);
 
   const currentQuestion = filteredQuestions[currentQuestionIndex];
 
@@ -569,6 +592,21 @@ export default function App() {
 
   const handleStartCampaignConcept = (conceptId: string) => {
     setActiveCampaignConcept(conceptId);
+    setRetryQuestions(null); // a fresh attempt plays the full concept
+    setGameState("playing");
+    setConfirmExit(false);
+    setCurrentQuestionIndex(0);
+    setScore(0);
+    setGameHistory([]);
+    resetQuestionState();
+    audio.playStart();
+  };
+
+  /** Replay only the questions missed in the attempt just finished. */
+  const handleRetryMissed = () => {
+    const missed = getMissedQuestions(gameHistory as any);
+    if (missed.length === 0) return;
+    setRetryQuestions(missed);
     setGameState("playing");
     setConfirmExit(false);
     setCurrentQuestionIndex(0);
@@ -583,6 +621,7 @@ export default function App() {
     const wasCampaign = !!activeCampaignConcept;
     setConfirmExit(false);
     setActiveCampaignConcept(null);
+    setRetryQuestions(null);
     setCurrentQuestionIndex(0);
     setScore(0);
     setGameHistory([]);
@@ -743,11 +782,11 @@ export default function App() {
 
   useEffect(() => {
     if (gameState === "results" && activeCampaignConcept) {
-      if (accuracy === 100) {
-        const idx = CONCEPTS.findIndex(c => c.id === activeCampaignConcept);
+      if (hasPassedConcept(accuracy)) {
         setCompletedConcepts(prev => Array.from(new Set([...prev, activeCampaignConcept])));
-        if (idx < CONCEPTS.length - 1) {
-           setUnlockedConcepts(prev => Array.from(new Set([...prev, CONCEPTS[idx + 1].id])));
+        const next = nextConceptId(CONCEPTS, activeCampaignConcept);
+        if (next) {
+          setUnlockedConcepts(prev => Array.from(new Set([...prev, next])));
         }
       }
     }
@@ -2229,14 +2268,52 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex gap-4 mt-8">
+              {/* Campaign outcome: tell the learner where they stand and, if
+                  they fell short, let them retry just the items they missed. */}
+              {activeCampaignConcept && (
+                <div
+                  className={cn(
+                    "rounded-2xl border p-5 text-center",
+                    hasPassedConcept(accuracy)
+                      ? "bg-emerald-500/10 border-emerald-500/30"
+                      : "bg-amber-500/10 border-amber-500/30",
+                  )}
+                >
+                  {hasPassedConcept(accuracy) ? (
+                    <p className="font-bold text-emerald-400">
+                      Concept complete — {accuracy}% accuracy. Next concept unlocked.
+                    </p>
+                  ) : (
+                    <p className="font-bold text-amber-400">
+                      {accuracy}% accuracy — {CAMPAIGN_PASS_THRESHOLD}% is needed to
+                      unlock the next concept. Review the explanations above, then
+                      retry the questions you missed.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-4 mt-8">
+                {activeCampaignConcept &&
+                  !hasPassedConcept(accuracy) &&
+                  getMissedQuestions(gameHistory as any).length > 0 && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleRetryMissed}
+                      className="flex-1 py-5 bg-amber-500 text-black font-bold rounded-2xl hover:bg-amber-400 transition-all flex items-center justify-center gap-2"
+                    >
+                      <RotateCcw className="w-5 h-5" />
+                      RETRY {getMissedQuestions(gameHistory as any).length} MISSED
+                    </motion.button>
+                  )}
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => setGameState(activeCampaignConcept ? "campaign" : "lobby")}
                   className="flex-1 py-5 bg-white text-black font-bold rounded-2xl hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                 >
-                  {activeCampaignConcept ? <MapIcon className="w-5 h-5" /> : <Users className="w-5 h-5" />} 
+                  {activeCampaignConcept ? <MapIcon className="w-5 h-5" /> : <Users className="w-5 h-5" />}
                   {activeCampaignConcept ? "RETURN TO CAMPAIGN" : "OPERATIONS CENTER"}
                 </motion.button>
               </div>
