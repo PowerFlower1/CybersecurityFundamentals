@@ -52,7 +52,7 @@ Ordered so each item unblocks the next. Content work is gated on item 1.
   unlock threshold to 80%, and on the results screen for a failed attempt,
   offer a "Retry missed questions" action that replays only the incorrect items.
 
-- [ ] **Enable TypeScript `strict` mode.** `tsconfig.json` has no `strict`
+- [x] **Enable TypeScript `strict` mode.** `tsconfig.json` has no `strict`
   flag, so it defaults off. This was caught in practice: the admin editor
   constructed a `Question` missing the newly-required `concept` field and
   `tsc` did not flag it at the call site (it only errors on a direct
