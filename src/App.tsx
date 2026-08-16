@@ -31,9 +31,10 @@ import {
   Crown,
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { CYBER_QUESTIONS, type Question } from "./constants";
+import { CYBER_QUESTIONS, type Question, type ConceptId } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
+import { selectConceptQuestions } from "./lib/questions";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
   api,
@@ -136,12 +137,8 @@ export default function App() {
 
   const filteredQuestions = useMemo(() => {
     if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
-      const conceptIdx = CONCEPTS.findIndex((c) => c.id === activeCampaignConcept);
-      if (conceptIdx !== -1) {
-         // Because each concept has exactly 3 questions sequentially
-         const startIndex = conceptIdx * 3;
-         return bankQuestions.slice(startIndex, startIndex + 3);
-      }
+      const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
+      if (conceptQuestions.length > 0) return conceptQuestions;
     }
 
     const questions =
@@ -2267,7 +2264,7 @@ export default function App() {
                   <div className="flex items-center justify-between">
                      <p className="text-slate-600 font-medium">Total Questions: {bankQuestions.length}</p>
                      <div className="flex gap-2">
-                       <button onClick={() => setEditingQuestion({ id: '', type: 'mcq', question: '', options: ['', '', '', ''], correctAnswer: '', explanation: '', difficulty: 'medium' })} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors text-sm">
+                       <button onClick={() => setEditingQuestion({ id: '', concept: 'art_of_defending', type: 'mcq', question: '', options: ['', '', '', ''], correctAnswer: '', explanation: '', difficulty: 'medium' })} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors text-sm">
                           New Question
                        </button>
                        <button onClick={handleSeedQuestions} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors text-sm">
@@ -2306,6 +2303,16 @@ export default function App() {
                             <label className="text-xs font-bold text-slate-500 uppercase">Image URL (Optional)</label>
                             <input type="url" value={editingQuestion.imageUrl || ''} onChange={e => setEditingQuestion({...editingQuestion, imageUrl: e.target.value})} placeholder="https://example.com/image.png" className="w-full mt-1 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500" />
                           </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 uppercase">Concept</label>
+                             <select value={editingQuestion.concept} onChange={e => setEditingQuestion({...editingQuestion, concept: e.target.value as ConceptId})} className="w-full mt-1 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500">
+                               {CONCEPTS.map(c => (
+                                 <option key={c.id} value={c.id}>{c.name}</option>
+                               ))}
+                             </select>
+                             <p className="text-[11px] text-slate-400 mt-1">Determines which solo-campaign track this question appears in.</p>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                                <label className="text-xs font-bold text-slate-500 uppercase">Difficulty</label>
