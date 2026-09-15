@@ -83,11 +83,37 @@ export interface AnswerTileStyle {
   letter: string;
 }
 
+// Deep, brand-aligned tones on dark cards — deliberately not the flat
+// primary quartet common to mainstream quiz games.
 export const ANSWER_TILES: AnswerTileStyle[] = [
-  { bg: "bg-amber-500", hover: "hover:bg-amber-400", ring: "ring-amber-300", shape: "triangle", letter: "A" },
-  { bg: "bg-blue-600", hover: "hover:bg-blue-500", ring: "ring-blue-300", shape: "diamond", letter: "B" },
-  { bg: "bg-emerald-500", hover: "hover:bg-emerald-400", ring: "ring-emerald-300", shape: "circle", letter: "C" },
-  { bg: "bg-rose-500", hover: "hover:bg-rose-400", ring: "ring-rose-300", shape: "square", letter: "D" },
+  {
+    bg: "bg-indigo-500/15 border-indigo-400/60",
+    hover: "hover:bg-indigo-500/25 hover:border-indigo-300",
+    ring: "ring-indigo-400 text-indigo-300",
+    shape: "triangle",
+    letter: "A",
+  },
+  {
+    bg: "bg-cyan-500/15 border-cyan-400/60",
+    hover: "hover:bg-cyan-500/25 hover:border-cyan-300",
+    ring: "ring-cyan-400 text-cyan-300",
+    shape: "diamond",
+    letter: "B",
+  },
+  {
+    bg: "bg-violet-500/15 border-violet-400/60",
+    hover: "hover:bg-violet-500/25 hover:border-violet-300",
+    ring: "ring-violet-400 text-violet-300",
+    shape: "circle",
+    letter: "C",
+  },
+  {
+    bg: "bg-teal-500/15 border-teal-400/60",
+    hover: "hover:bg-teal-500/25 hover:border-teal-300",
+    ring: "ring-teal-400 text-teal-300",
+    shape: "square",
+    letter: "D",
+  },
 ];
 
 export function tileStyle(index: number): AnswerTileStyle {

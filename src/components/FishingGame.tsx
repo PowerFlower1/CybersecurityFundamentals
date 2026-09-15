@@ -117,13 +117,13 @@ export function FishingGame({
 
   const prompt =
     phase === "idle"
-      ? "Click anywhere to cast"
+      ? "Click anywhere to cast your line"
       : phase === "hooked"
-        ? "Hooked! Click anywhere to reel"
+        ? "Signal on the line — click anywhere to reel in"
         : phase === "casting"
           ? "Casting…"
           : phase === "waiting"
-            ? "Waiting for a bite…"
+            ? "Scanning the depths…"
             : "Reeling in…";
 
   if (phase !== "question") {
@@ -144,12 +144,22 @@ export function FishingGame({
 
           {phase === "hooked" && (
             <motion.div
-              initial={reducedMotion ? false : { scale: 0.7, rotate: -14, opacity: 0 }}
-              animate={{ scale: 1, rotate: -8, opacity: 1 }}
-              className="absolute top-6 right-6 bg-orange-500 text-white px-7 py-4 rounded-2xl border-4 border-white shadow-xl"
+              initial={reducedMotion ? false : { y: -8, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="absolute top-5 right-5 flex items-center gap-3 bg-slate-900/85 backdrop-blur-sm border border-cyan-400/50 px-5 py-3 rounded-xl shadow-lg"
             >
-              <p className="text-3xl md:text-4xl font-black leading-none">Hooked!</p>
-              <p className="text-xs font-semibold opacity-90 mt-1">Click anywhere to reel</p>
+              <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
+                {!reducedMotion && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                )}
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-400" />
+              </span>
+              <div>
+                <p className="text-sm font-bold tracking-[0.18em] uppercase text-cyan-300 leading-none">
+                  Signal on the line
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">Click anywhere to reel in</p>
+              </div>
             </motion.div>
           )}
         </button>
@@ -191,21 +201,26 @@ export function FishingGame({
               whileHover={!showExplanation && !reducedMotion ? { scale: 1.02 } : {}}
               whileTap={!showExplanation && !reducedMotion ? { scale: 0.98 } : {}}
               className={cn(
-                "relative flex items-center gap-4 p-6 md:p-7 rounded-2xl text-left text-white font-bold text-lg md:text-xl shadow-lg transition-all",
+                "relative flex items-center gap-4 p-5 md:p-6 rounded-2xl border text-left text-white font-semibold text-base md:text-lg backdrop-blur-sm transition-all",
                 "focus:outline-none focus-visible:ring-4 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]",
                 style.bg,
                 !showExplanation && style.hover,
                 style.ring,
-                showExplanation && isRight && "ring-4 ring-white",
-                showExplanation && isPicked && !isRight && "ring-4 ring-white/70",
-                dim && "opacity-40",
+                showExplanation && isRight && "border-emerald-400 bg-emerald-500/20 ring-2 ring-emerald-400",
+                showExplanation && isPicked && !isRight && "border-rose-400 bg-rose-500/20 ring-2 ring-rose-400",
+                dim && "opacity-35",
               )}
             >
-              <span className="flex items-center gap-2 shrink-0 opacity-90">
+              <span
+                className={cn(
+                  "flex items-center justify-center gap-1.5 shrink-0 w-14 h-10 rounded-lg bg-white/10 border border-white/10",
+                  style.ring,
+                )}
+              >
                 <TileShape shape={style.shape} />
-                <span className="font-mono text-sm">{style.letter}</span>
+                <span className="font-mono text-xs font-bold">{style.letter}</span>
               </span>
-              <span className="flex-1">{option}</span>
+              <span className="flex-1 text-slate-100">{option}</span>
               {showExplanation && isRight && (
                 <span className="sr-only"> — correct answer</span>
               )}
