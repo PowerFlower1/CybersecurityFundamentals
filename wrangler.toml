@@ -1,4 +1,4 @@
-name = "ready-force-labs"
+name = "cybersecurityfundamentals"
 main = "src/worker/index.ts"
 compatibility_date = "2024-11-06"
 
