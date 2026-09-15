@@ -34,7 +34,11 @@ import confetti from "canvas-confetti";
 import { CYBER_QUESTIONS, type Question, type ConceptId } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
-import { selectConceptQuestions } from "./lib/questions";
+import {
+  selectSoloQuestions,
+  difficultyAvailability,
+  type SoloDifficulty,
+} from "./lib/questions";
 import { studentsToCsv, csvFilename } from "./lib/csv";
 import {
   hasPassedConcept,
@@ -134,6 +138,10 @@ export default function App() {
   const [activeCampaignConcept, setActiveCampaignConcept] = useState<string | null>(null);
   // When set, the next round replays only these (previously missed) questions.
   const [retryQuestions, setRetryQuestions] = useState<Question[] | null>(null);
+  // Solo practice settings, independent of the hosted-session difficulty.
+  const [soloDifficulty, setSoloDifficulty] = useState<SoloDifficulty>("all");
+  // True while playing an all-topics round rather than a single skill.
+  const [soloAllTopics, setSoloAllTopics] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("rfc_unlocked_concepts", JSON.stringify(unlockedConcepts));
@@ -159,9 +167,18 @@ export default function App() {
     // A retry round replays only the questions the learner missed.
     if (retryQuestions && retryQuestions.length > 0) return retryQuestions;
 
-    if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
-      const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
-      if (conceptQuestions.length > 0) return conceptQuestions;
+    // Solo practice: a single skill, or an all-topics round. Difficulty is
+    // applied on top of either.
+    if (
+      (gameState === "campaign" || activeCampaignConcept || soloAllTopics) &&
+      bankQuestions.length > 0
+    ) {
+      const soloQuestions = selectSoloQuestions(bankQuestions, {
+        conceptId: soloAllTopics ? null : activeCampaignConcept,
+        difficulty: soloDifficulty,
+        limit: soloAllTopics ? 10 : undefined,
+      });
+      if (soloQuestions.length > 0) return soloQuestions;
     }
 
     const questions =
@@ -206,6 +223,8 @@ export default function App() {
     gameState,
     activeCampaignConcept,
     retryQuestions,
+    soloAllTopics,
+    soloDifficulty,
   ]);
 
   const currentQuestion = filteredQuestions[currentQuestionIndex];
@@ -593,7 +612,26 @@ export default function App() {
 
   const handleStartCampaignConcept = (conceptId: string) => {
     setActiveCampaignConcept(conceptId);
+    setSoloAllTopics(false);
     setRetryQuestions(null); // a fresh attempt plays the full concept
+    setGameState("playing");
+    setConfirmExit(false);
+    setCurrentQuestionIndex(0);
+    setScore(0);
+    setGameHistory([]);
+    resetQuestionState();
+    audio.playStart();
+  };
+
+  /**
+   * Start a mixed round drawn from every skill. It does not set an active
+   * concept, so it neither unlocks nor completes anything on the path — it is
+   * pure practice.
+   */
+  const handleStartAllTopics = () => {
+    setActiveCampaignConcept(null);
+    setSoloAllTopics(true);
+    setRetryQuestions(null);
     setGameState("playing");
     setConfirmExit(false);
     setCurrentQuestionIndex(0);
@@ -622,6 +660,7 @@ export default function App() {
     const wasCampaign = !!activeCampaignConcept;
     setConfirmExit(false);
     setActiveCampaignConcept(null);
+    setSoloAllTopics(false);
     setRetryQuestions(null);
     setCurrentQuestionIndex(0);
     setScore(0);
@@ -800,14 +839,14 @@ export default function App() {
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
-        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "hosting")
+        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "hosting" || gameState === "campaign")
           ? "bg-slate-50 text-slate-900 overflow-y-auto"
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
     >
       {/* Animated Background — purely decorative, so it is dropped entirely
           when the user has asked for reduced motion. */}
-      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
+      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && gameState !== "campaign" && (
         <div className="fixed inset-0 z-0 pointer-events-none">
           {/* Animated Grid */}
           <div className="absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)]">
@@ -884,9 +923,23 @@ export default function App() {
                  unlockedConcepts={unlockedConcepts}
                  completedConcepts={completedConcepts}
                  onSelectConcept={handleStartCampaignConcept}
+                 onSelectAllTopics={handleStartAllTopics}
+                 difficulty={soloDifficulty}
+                 onDifficultyChange={setSoloDifficulty}
+                 availability={difficultyAvailability(bankQuestions, null)}
+                 conceptCounts={Object.fromEntries(
+                   CONCEPTS.map((c) => [
+                     c.id,
+                     selectSoloQuestions(bankQuestions, {
+                       conceptId: c.id,
+                       difficulty: soloDifficulty,
+                     }).length,
+                   ]),
+                 )}
                  onBack={() => {
                    setGameState("login");
                    setActiveCampaignConcept(null);
+                   setSoloAllTopics(false);
                  }}
               />
             </motion.div>
@@ -955,6 +1008,53 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                {/* How it works */}
+                <div className="w-full max-w-4xl mx-auto space-y-6 px-4 md:px-0">
+                  <h2 className="text-center text-2xl font-extrabold tracking-tight text-slate-900">
+                    How it works
+                  </h2>
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    {[
+                      {
+                        step: "1",
+                        icon: <Play className="w-5 h-5" />,
+                        title: "Jump in",
+                        text: "Join your class with a code, or start a solo mission — it takes seconds.",
+                      },
+                      {
+                        step: "2",
+                        icon: <Timer className="w-5 h-5" />,
+                        title: "Answer & race the clock",
+                        text: "Quick multiple-choice challenges. Faster correct answers earn more points.",
+                      },
+                      {
+                        step: "3",
+                        icon: <Brain className="w-5 h-5" />,
+                        title: "Learn from every answer",
+                        text: "Right or wrong, each question ends with a plain-language explanation.",
+                      },
+                    ].map((s) => (
+                      <div
+                        key={s.step}
+                        className="p-6 bg-white border border-slate-200 rounded-2xl space-y-3 shadow-sm"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                            {s.icon}
+                          </div>
+                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                            Step {s.step}
+                          </span>
+                        </div>
+                        <h3 className="font-bold text-slate-900">{s.title}</h3>
+                        <p className="text-sm text-slate-500 leading-relaxed">
+                          {s.text}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -1079,53 +1179,6 @@ export default function App() {
                     >
                       Start Training <ChevronRight className="w-5 h-5" />
                     </motion.button>
-                  </div>
-                </div>
-
-                {/* How it works */}
-                <div className="w-full max-w-4xl mx-auto space-y-6 px-4 md:px-0">
-                  <h2 className="text-center text-2xl font-extrabold tracking-tight text-slate-900">
-                    How it works
-                  </h2>
-                  <div className="grid sm:grid-cols-3 gap-4">
-                    {[
-                      {
-                        step: "1",
-                        icon: <Play className="w-5 h-5" />,
-                        title: "Jump in",
-                        text: "Join your class with a code, or start a solo mission — it takes seconds.",
-                      },
-                      {
-                        step: "2",
-                        icon: <Timer className="w-5 h-5" />,
-                        title: "Answer & race the clock",
-                        text: "Quick multiple-choice challenges. Faster correct answers earn more points.",
-                      },
-                      {
-                        step: "3",
-                        icon: <Brain className="w-5 h-5" />,
-                        title: "Learn from every answer",
-                        text: "Right or wrong, each question ends with a plain-language explanation.",
-                      },
-                    ].map((s) => (
-                      <div
-                        key={s.step}
-                        className="p-6 bg-white border border-slate-200 rounded-2xl space-y-3 shadow-sm"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                            {s.icon}
-                          </div>
-                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                            Step {s.step}
-                          </span>
-                        </div>
-                        <h3 className="font-bold text-slate-900">{s.title}</h3>
-                        <p className="text-sm text-slate-500 leading-relaxed">
-                          {s.text}
-                        </p>
-                      </div>
-                    ))}
                   </div>
                 </div>
 

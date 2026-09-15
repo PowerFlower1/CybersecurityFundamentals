@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { selectConceptQuestions } from "../src/lib/questions";
+import {
+  selectConceptQuestions,
+  selectSoloQuestions,
+  difficultyAvailability,
+  SOLO_DIFFICULTIES,
+} from "../src/lib/questions";
 import { CYBER_QUESTIONS, type Question, type ConceptId } from "../src/constants";
 import { CONCEPTS } from "../src/components/SoloMap";
 
@@ -83,5 +88,100 @@ describe("selectConceptQuestions", () => {
     ];
     expect(selectConceptQuestions(bank, "integrity").map((q) => q.id)).toEqual(["a1", "a2"]);
     expect(selectConceptQuestions(bank, "availability").map((q) => q.id)).toEqual(["b1"]);
+  });
+});
+
+describe("selectSoloQuestions", () => {
+  it("returns a single concept's questions when given a concept id", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: "integrity",
+      difficulty: "all",
+    });
+    expect(picked.length).toBeGreaterThan(0);
+    expect(picked.every((q) => q.concept === "integrity")).toBe(true);
+  });
+
+  it("draws from every concept for an all-topics round", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: null,
+      difficulty: "all",
+    });
+    expect(picked).toHaveLength(CYBER_QUESTIONS.length);
+    expect(new Set(picked.map((q) => q.concept)).size).toBe(CONCEPT_IDS.length);
+  });
+
+  it("filters by difficulty", () => {
+    for (const difficulty of ["easy", "medium", "hard"] as const) {
+      const picked = selectSoloQuestions(CYBER_QUESTIONS, { conceptId: null, difficulty });
+      expect(picked.length).toBeGreaterThan(0);
+      expect(picked.every((q) => q.difficulty === difficulty)).toBe(true);
+    }
+  });
+
+  it("combines concept and difficulty filters", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: "authentication",
+      difficulty: "easy",
+    });
+    expect(picked.every((q) => q.concept === "authentication" && q.difficulty === "easy")).toBe(true);
+  });
+
+  it("caps the round when a limit is given", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: null,
+      difficulty: "all",
+      limit: 3,
+    });
+    expect(picked).toHaveLength(3);
+  });
+
+  it("ignores a limit larger than the pool", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: "integrity",
+      difficulty: "all",
+      limit: 99,
+    });
+    expect(picked.length).toBeLessThanOrEqual(CYBER_QUESTIONS.length);
+    expect(picked.every((q) => q.concept === "integrity")).toBe(true);
+  });
+
+  // The bank is small, so a concept+difficulty combination can legitimately
+  // be empty. It must return [] rather than silently falling back.
+  it("returns an empty list when no question matches", () => {
+    const picked = selectSoloQuestions(CYBER_QUESTIONS, {
+      conceptId: "not_a_concept",
+      difficulty: "hard",
+    });
+    expect(picked).toEqual([]);
+  });
+});
+
+describe("difficultyAvailability", () => {
+  it("reports a count for every difficulty option", () => {
+    const counts = difficultyAvailability(CYBER_QUESTIONS, null);
+    for (const level of SOLO_DIFFICULTIES) {
+      expect(typeof counts[level]).toBe("number");
+    }
+  });
+
+  it("counts 'all' as the size of the whole bank", () => {
+    expect(difficultyAvailability(CYBER_QUESTIONS, null).all).toBe(CYBER_QUESTIONS.length);
+  });
+
+  it("splits the bank across the three difficulties", () => {
+    const c = difficultyAvailability(CYBER_QUESTIONS, null);
+    expect(c.easy + c.medium + c.hard).toBe(c.all);
+  });
+
+  it("scopes counts to a concept", () => {
+    const counts = difficultyAvailability(CYBER_QUESTIONS, "integrity");
+    const total = CYBER_QUESTIONS.filter((q) => q.concept === "integrity").length;
+    expect(counts.all).toBe(total);
+    expect(counts.easy + counts.medium + counts.hard).toBe(total);
+  });
+
+  it("reports zero for a concept with no questions", () => {
+    const counts = difficultyAvailability(CYBER_QUESTIONS, "not_a_concept");
+    expect(counts).toEqual({ all: 0, easy: 0, medium: 0, hard: 0 });
   });
 });
