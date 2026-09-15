@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useReducedMotion, MotionConfig } from "motion/react";
 import {
   Shield,
   ShieldAlert,
@@ -31,9 +31,18 @@ import {
   Crown,
 } from "lucide-react";
 import confetti from "canvas-confetti";
-import { CYBER_QUESTIONS, type Question } from "./constants";
+import { CYBER_QUESTIONS, type Question, type ConceptId } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
+import { selectConceptQuestions } from "./lib/questions";
+import { studentsToCsv, csvFilename } from "./lib/csv";
+import {
+  hasPassedConcept,
+  getMissedQuestions,
+  nextConceptId,
+  CAMPAIGN_PASS_THRESHOLD,
+} from "./lib/campaign";
+import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import {
   api,
@@ -72,6 +81,10 @@ interface PlayerData {
 }
 
 export default function App() {
+  // Honour the OS "reduce motion" setting: suppresses decorative animation,
+  // confetti, and screen-transition movement for users who get motion sickness
+  // or find animation distracting.
+  const prefersReducedMotion = useReducedMotion();
   const [user, setUser] = useState<SessionUser | null>(null);
   const playerInfoRef = useRef<{ code: string; id: string; token: string; name: string } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -119,6 +132,8 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
   const [activeCampaignConcept, setActiveCampaignConcept] = useState<string | null>(null);
+  // When set, the next round replays only these (previously missed) questions.
+  const [retryQuestions, setRetryQuestions] = useState<Question[] | null>(null);
 
   useEffect(() => {
     localStorage.setItem("rfc_unlocked_concepts", JSON.stringify(unlockedConcepts));
@@ -134,14 +149,19 @@ export default function App() {
   const [numberOfQuestions, setNumberOfQuestions] = useState<number>(10);
   const [timePerQuestion, setTimePerQuestion] = useState<number>(20);
 
+  // A per-question limit of 0 means "untimed" — the extended-time
+  // accommodation. Note the `??`: `||` would treat 0 as missing and silently
+  // fall back to a timed value.
+  const activeTimePerQuestion = roomData?.timePerQuestion ?? timePerQuestion;
+  const isUntimed = activeTimePerQuestion === 0;
+
   const filteredQuestions = useMemo(() => {
+    // A retry round replays only the questions the learner missed.
+    if (retryQuestions && retryQuestions.length > 0) return retryQuestions;
+
     if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
-      const conceptIdx = CONCEPTS.findIndex((c) => c.id === activeCampaignConcept);
-      if (conceptIdx !== -1) {
-         // Because each concept has exactly 3 questions sequentially
-         const startIndex = conceptIdx * 3;
-         return bankQuestions.slice(startIndex, startIndex + 3);
-      }
+      const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
+      if (conceptQuestions.length > 0) return conceptQuestions;
     }
 
     const questions =
@@ -174,7 +194,19 @@ export default function App() {
     // Use room's question count if available, otherwise local config
     const targetCount = roomData?.questionCount || numberOfQuestions;
     return questions.slice(0, targetCount);
-  }, [difficultyFilter, roomId, roomData?.questionCount, numberOfQuestions, bankQuestions]);
+    // gameState and activeCampaignConcept are read above, so they must be
+    // dependencies — without them, selecting a campaign concept returned the
+    // previously memoised (non-campaign) question list.
+  }, [
+    difficultyFilter,
+    roomId,
+    roomData?.questionCount,
+    numberOfQuestions,
+    bankQuestions,
+    gameState,
+    activeCampaignConcept,
+    retryQuestions,
+  ]);
 
   const currentQuestion = filteredQuestions[currentQuestionIndex];
 
@@ -448,6 +480,23 @@ export default function App() {
     setGameState("lobby");
   };
 
+  // Build the results CSV in the browser and hand it to the user as a
+  // download — no server round-trip needed, the data is already loaded.
+  const downloadResultsCsv = () => {
+    if (!metricsData?.students?.length) return;
+    const csv = studentsToCsv(metricsData.students);
+    // Prepend a BOM so Excel opens UTF-8 names (accents etc.) correctly.
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = csvFilename();
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const copyRoomCode = async () => {
     try {
       await navigator.clipboard.writeText(roomId);
@@ -544,6 +593,21 @@ export default function App() {
 
   const handleStartCampaignConcept = (conceptId: string) => {
     setActiveCampaignConcept(conceptId);
+    setRetryQuestions(null); // a fresh attempt plays the full concept
+    setGameState("playing");
+    setConfirmExit(false);
+    setCurrentQuestionIndex(0);
+    setScore(0);
+    setGameHistory([]);
+    resetQuestionState();
+    audio.playStart();
+  };
+
+  /** Replay only the questions missed in the attempt just finished. */
+  const handleRetryMissed = () => {
+    const missed = getMissedQuestions(gameHistory as any);
+    if (missed.length === 0) return;
+    setRetryQuestions(missed);
     setGameState("playing");
     setConfirmExit(false);
     setCurrentQuestionIndex(0);
@@ -558,6 +622,7 @@ export default function App() {
     const wasCampaign = !!activeCampaignConcept;
     setConfirmExit(false);
     setActiveCampaignConcept(null);
+    setRetryQuestions(null);
     setCurrentQuestionIndex(0);
     setScore(0);
     setGameHistory([]);
@@ -586,7 +651,7 @@ export default function App() {
   };
 
   const resetQuestionState = () => {
-    setTimeLeft(roomData?.timePerQuestion || timePerQuestion);
+    setTimeLeft(activeTimePerQuestion);
     setUserAnswer("");
     setShowExplanation(false);
     setIsCorrect(null);
@@ -603,7 +668,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (gameState === "playing" && !showExplanation) {
+    // Untimed sessions never count down and never auto-submit, so learners
+    // who need extended time can work at their own pace.
+    if (gameState === "playing" && !showExplanation && !isUntimed) {
       if (timeLeft > 0) {
         timerRef.current = setTimeout(() => {
           if (timeLeft <= 6) {
@@ -619,32 +686,39 @@ export default function App() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [timeLeft, gameState, showExplanation]);
+  }, [timeLeft, gameState, showExplanation, isUntimed]);
 
   const handleAnswerSubmit = (answer: string) => {
     if (showExplanation) return;
     const correct =
       answer.toLowerCase() === currentQuestion.correctAnswer.toLowerCase();
+    // Record the choice so the results view can highlight which option the
+    // learner actually picked alongside the correct one.
+    setUserAnswer(answer);
     setIsCorrect(correct);
     let newScore = score;
     if (correct) {
       audio.playCorrect();
-      newScore = score + 100 + timeLeft * 5;
+      // Untimed sessions award the base points only — there is no clock to
+      // race, so a speed bonus would penalise the accommodation.
+      newScore = score + 100 + (isUntimed ? 0 : timeLeft * 5);
       setScore(newScore);
-      confetti({
-        particleCount: 50,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ["#22c55e", "#ffffff"],
-      });
+      if (!prefersReducedMotion) {
+        confetti({
+          particleCount: 50,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ["#22c55e", "#ffffff"],
+        });
+      }
     } else {
       audio.playIncorrect();
     }
-    const maxTime = roomData?.timePerQuestion || timePerQuestion;
     const newHistoryEntry = {
       question: currentQuestion,
       correct,
-      timeTaken: maxTime - Math.max(0, timeLeft),
+      // No meaningful elapsed time to report when the question is untimed.
+      timeTaken: isUntimed ? 0 : activeTimePerQuestion - Math.max(0, timeLeft),
     };
     const newHistory = [...gameHistory, newHistoryEntry];
     setGameHistory(newHistory);
@@ -659,11 +733,13 @@ export default function App() {
     } else {
       setGameState("results");
       audio.playEnd();
-      confetti({
-        particleCount: 150,
-        spread: 120,
-        origin: { y: 0.5 },
-      });
+      if (!prefersReducedMotion) {
+        confetti({
+          particleCount: 150,
+          spread: 120,
+          origin: { y: 0.5 },
+        });
+      }
     }
   };
 
@@ -707,17 +783,20 @@ export default function App() {
 
   useEffect(() => {
     if (gameState === "results" && activeCampaignConcept) {
-      if (accuracy === 100) {
-        const idx = CONCEPTS.findIndex(c => c.id === activeCampaignConcept);
+      if (hasPassedConcept(accuracy)) {
         setCompletedConcepts(prev => Array.from(new Set([...prev, activeCampaignConcept])));
-        if (idx < CONCEPTS.length - 1) {
-           setUnlockedConcepts(prev => Array.from(new Set([...prev, CONCEPTS[idx + 1].id])));
+        const next = nextConceptId(CONCEPTS, activeCampaignConcept);
+        if (next) {
+          setUnlockedConcepts(prev => Array.from(new Set([...prev, next])));
         }
       }
     }
   }, [gameState, accuracy, activeCampaignConcept]);
 
   return (
+    // reducedMotion="user" makes every motion component below respect the OS
+    // setting, so screen transitions become instant instead of animated.
+    <MotionConfig reducedMotion="user">
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
@@ -726,8 +805,9 @@ export default function App() {
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
     >
-      {/* Animated Background */}
-      {gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
+      {/* Animated Background — purely decorative, so it is dropped entirely
+          when the user has asked for reduced motion. */}
+      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
         <div className="fixed inset-0 z-0 pointer-events-none">
           {/* Animated Grid */}
           <div className="absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)]">
@@ -1146,6 +1226,7 @@ export default function App() {
                   onClick={handleSignOut}
                   className="p-2.5 bg-white hover:bg-rose-50 rounded-full text-slate-500 hover:text-rose-500 transition-all border border-slate-200 shadow-sm"
                   title="Sign Out"
+                  aria-label="Sign out"
                 >
                   <LogOut className="w-5 h-5" />
                 </motion.button>
@@ -1218,10 +1299,11 @@ export default function App() {
                       Time per Question
                     </p>
                     <div className="flex bg-slate-100 rounded-2xl p-1.5 border border-slate-200">
-                      {[10, 20, 30, 45, 60].map((time) => (
+                      {[10, 20, 30, 45, 60, 0].map((time) => (
                         <button
                           key={time}
                           onClick={() => setTimePerQuestion(time)}
+                          title={time === 0 ? "No time limit — accessibility accommodation" : undefined}
                           className={cn(
                             "px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
                             timePerQuestion === time
@@ -1229,7 +1311,7 @@ export default function App() {
                               : "text-slate-500 hover:text-slate-800",
                           )}
                         >
-                          {time}s
+                          {time === 0 ? "Untimed" : `${time}s`}
                         </button>
                       ))}
                     </div>
@@ -1436,6 +1518,7 @@ export default function App() {
                           <button
                             onClick={copyRoomCode}
                             title="Copy code"
+                            aria-label={codeCopied ? "Session code copied" : "Copy session code"}
                             className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all"
                           >
                             {codeCopied ? (
@@ -1503,12 +1586,13 @@ export default function App() {
                             Time per Question
                           </p>
                           <div className="flex flex-wrap justify-center gap-2">
-                            {[10, 20, 30, 45, 60].map((time) => {
-                              const active = (roomData?.timePerQuestion ?? timePerQuestion) === time;
+                            {[10, 20, 30, 45, 60, 0].map((time) => {
+                              const active = activeTimePerQuestion === time;
                               return (
                                 <button
                                   key={time}
                                   onClick={() => updateTimePerQuestion(time)}
+                                  title={time === 0 ? "No time limit — accessibility accommodation" : undefined}
                                   className={cn(
                                     "px-5 py-2.5 rounded-xl border text-sm font-bold transition-all shadow-sm",
                                     active
@@ -1516,11 +1600,16 @@ export default function App() {
                                       : "bg-white text-slate-600 border-slate-200 hover:bg-blue-50",
                                   )}
                                 >
-                                  {time}s
+                                  {time === 0 ? "Untimed" : `${time}s`}
                                 </button>
                               );
                             })}
                           </div>
+                          {isUntimed && (
+                            <p className="text-xs text-emerald-700 font-medium text-center">
+                              Students can take as long as they need on each question.
+                            </p>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1743,6 +1832,17 @@ export default function App() {
                     </div>
                   )}
 
+                  {isUntimed ? (
+                    <div
+                      className="relative w-12 h-12 flex items-center justify-center rounded-full border-2 border-emerald-500/40 bg-emerald-500/10"
+                      title="Untimed — take as long as you need"
+                    >
+                      <span className="text-xl font-bold text-emerald-400" aria-hidden="true">
+                        ∞
+                      </span>
+                      <span className="sr-only">Untimed question — no time limit</span>
+                    </div>
+                  ) : (
                   <div className="relative w-12 h-12 flex items-center justify-center">
                     <svg className="w-full h-full -rotate-90">
                       <circle
@@ -1770,9 +1870,7 @@ export default function App() {
                         animate={{
                           strokeDashoffset:
                             125.6 *
-                            (1 -
-                              Math.max(0, timeLeft) /
-                                (roomData?.timePerQuestion || timePerQuestion)),
+                            (1 - Math.max(0, timeLeft) / activeTimePerQuestion),
                         }}
                       />
                     </svg>
@@ -1789,6 +1887,7 @@ export default function App() {
                       {timeLeft}
                     </span>
                   </div>
+                  )}
                 </div>
 
                 <div className="text-right">
@@ -1867,26 +1966,29 @@ export default function App() {
                           key={idx}
                           disabled={showExplanation}
                           onClick={() => handleAnswerSubmit(option)}
-                          whileHover={!showExplanation ? { scale: 1.02 } : {}}
-                          whileTap={!showExplanation ? { scale: 0.98 } : {}}
+                          whileHover={!showExplanation && !prefersReducedMotion ? { scale: 1.02 } : {}}
+                          whileTap={!showExplanation && !prefersReducedMotion ? { scale: 0.98 } : {}}
                           animate={
-                            showExplanation &&
-                            option === currentQuestion.correctAnswer
-                              ? {
-                                  scale: [1, 1.05, 1],
-                                  transition: { duration: 0.3 },
-                                }
+                            prefersReducedMotion
+                              ? {}
                               : showExplanation &&
-                                  isCorrect === false &&
-                                  userAnswer === option
+                                  option === currentQuestion.correctAnswer
                                 ? {
-                                    x: [-10, 10, -10, 10, 0],
-                                    transition: { duration: 0.4 },
+                                    scale: [1, 1.05, 1],
+                                    transition: { duration: 0.3 },
                                   }
-                                : {}
+                                : showExplanation &&
+                                    isCorrect === false &&
+                                    userAnswer === option
+                                  ? {
+                                      x: [-10, 10, -10, 10, 0],
+                                      transition: { duration: 0.4 },
+                                    }
+                                  : {}
                           }
                           className={cn(
                             "group relative p-5 bg-white/5 border border-white/10 text-left rounded-2xl transition-colors",
+                            "focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]",
                             !showExplanation
                               ? "hover:border-emerald-500/50 hover:bg-emerald-500/5"
                               : option === currentQuestion.correctAnswer
@@ -1897,10 +1999,29 @@ export default function App() {
                           )}
                         >
                           <span className="font-medium">{option}</span>
+                          {showExplanation && (
+                            <span className="sr-only">
+                              {option === currentQuestion.correctAnswer
+                                ? " — correct answer"
+                                : userAnswer === option
+                                  ? " — your answer, incorrect"
+                                  : ""}
+                            </span>
+                          )}
                         </motion.button>
                       ))}
                   </div>
                 </motion.div>
+              </div>
+
+              {/* Screen-reader announcement of the result. Visually hidden
+                  because the same information is conveyed on screen. */}
+              <div className="sr-only" role="status" aria-live="polite">
+                {showExplanation
+                  ? isCorrect
+                    ? `Correct. Your score is now ${score}.`
+                    : `Incorrect. The correct answer is: ${currentQuestion.correctAnswer}. Your score is ${score}.`
+                  : ""}
               </div>
 
               <AnimatePresence>
@@ -1963,6 +2084,25 @@ export default function App() {
                         >
                           {currentQuestion.explanation}
                         </motion.p>
+                        {/* Framework alignment — shows learners that this maps
+                            to recognised industry standards. */}
+                        {(() => {
+                          const s = standardsFor(currentQuestion);
+                          const tags = [...(s.securityPlus ?? []), ...(s.nice ?? [])];
+                          if (tags.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-[10px] font-semibold text-slate-400"
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <motion.button
@@ -2148,14 +2288,52 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex gap-4 mt-8">
+              {/* Campaign outcome: tell the learner where they stand and, if
+                  they fell short, let them retry just the items they missed. */}
+              {activeCampaignConcept && (
+                <div
+                  className={cn(
+                    "rounded-2xl border p-5 text-center",
+                    hasPassedConcept(accuracy)
+                      ? "bg-emerald-500/10 border-emerald-500/30"
+                      : "bg-amber-500/10 border-amber-500/30",
+                  )}
+                >
+                  {hasPassedConcept(accuracy) ? (
+                    <p className="font-bold text-emerald-400">
+                      Concept complete — {accuracy}% accuracy. Next concept unlocked.
+                    </p>
+                  ) : (
+                    <p className="font-bold text-amber-400">
+                      {accuracy}% accuracy — {CAMPAIGN_PASS_THRESHOLD}% is needed to
+                      unlock the next concept. Review the explanations above, then
+                      retry the questions you missed.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-4 mt-8">
+                {activeCampaignConcept &&
+                  !hasPassedConcept(accuracy) &&
+                  getMissedQuestions(gameHistory as any).length > 0 && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleRetryMissed}
+                      className="flex-1 py-5 bg-amber-500 text-black font-bold rounded-2xl hover:bg-amber-400 transition-all flex items-center justify-center gap-2"
+                    >
+                      <RotateCcw className="w-5 h-5" />
+                      RETRY {getMissedQuestions(gameHistory as any).length} MISSED
+                    </motion.button>
+                  )}
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => setGameState(activeCampaignConcept ? "campaign" : "lobby")}
                   className="flex-1 py-5 bg-white text-black font-bold rounded-2xl hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                 >
-                  {activeCampaignConcept ? <MapIcon className="w-5 h-5" /> : <Users className="w-5 h-5" />} 
+                  {activeCampaignConcept ? <MapIcon className="w-5 h-5" /> : <Users className="w-5 h-5" />}
                   {activeCampaignConcept ? "RETURN TO CAMPAIGN" : "OPERATIONS CENTER"}
                 </motion.button>
               </div>
@@ -2249,6 +2427,7 @@ export default function App() {
                         onClick={() => handleDeleteRoom(room.id)}
                         className="p-2.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-100 rounded-xl transition-all"
                         title="Delete Session"
+                        aria-label={`Delete session ${room.id}`}
                       >
                         <Trash2 className="w-5 h-5" />
                       </motion.button>
@@ -2267,7 +2446,7 @@ export default function App() {
                   <div className="flex items-center justify-between">
                      <p className="text-slate-600 font-medium">Total Questions: {bankQuestions.length}</p>
                      <div className="flex gap-2">
-                       <button onClick={() => setEditingQuestion({ id: '', type: 'mcq', question: '', options: ['', '', '', ''], correctAnswer: '', explanation: '', difficulty: 'medium' })} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors text-sm">
+                       <button onClick={() => setEditingQuestion({ id: '', concept: 'art_of_defending', type: 'mcq', question: '', options: ['', '', '', ''], correctAnswer: '', explanation: '', difficulty: 'medium' })} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition-colors text-sm">
                           New Question
                        </button>
                        <button onClick={handleSeedQuestions} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors text-sm">
@@ -2306,6 +2485,16 @@ export default function App() {
                             <label className="text-xs font-bold text-slate-500 uppercase">Image URL (Optional)</label>
                             <input type="url" value={editingQuestion.imageUrl || ''} onChange={e => setEditingQuestion({...editingQuestion, imageUrl: e.target.value})} placeholder="https://example.com/image.png" className="w-full mt-1 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500" />
                           </div>
+                          <div>
+                             <label className="text-xs font-bold text-slate-500 uppercase">Concept</label>
+                             <select value={editingQuestion.concept} onChange={e => setEditingQuestion({...editingQuestion, concept: e.target.value as ConceptId})} className="w-full mt-1 p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500">
+                               {CONCEPTS.map(c => (
+                                 <option key={c.id} value={c.id}>{c.name}</option>
+                               ))}
+                             </select>
+                             <p className="text-[11px] text-slate-400 mt-1">Determines which solo-campaign track this question appears in.</p>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                                <label className="text-xs font-bold text-slate-500 uppercase">Difficulty</label>
@@ -2483,8 +2672,111 @@ export default function App() {
                          </div>
                        </div>
                        
+                       {/* Curriculum coverage — what a district or funder asks for. */}
                        <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
-                          <h3 className="text-lg font-bold text-slate-800">Student Profiles & Assessment Logs</h3>
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800">Standards Coverage</h3>
+                            <p className="text-sm text-slate-500">
+                              Framework alignment of the {bankQuestions.length}-question bank, at domain level.
+                            </p>
+                          </div>
+                          {(() => {
+                            const coverage = standardsCoverage(bankQuestions);
+                            const groups = [
+                              { label: "CompTIA Security+ (SY0-701)", rows: coverage.securityPlus },
+                              { label: "NICE Framework", rows: coverage.nice },
+                            ];
+                            return (
+                              <div className="grid md:grid-cols-2 gap-6">
+                                {groups.map((g) => (
+                                  <div key={g.label} className="space-y-2">
+                                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                                      {g.label}
+                                    </p>
+                                    {g.rows.length === 0 ? (
+                                      <p className="text-sm text-slate-400">No alignment recorded.</p>
+                                    ) : (
+                                      <ul className="space-y-2">
+                                        {g.rows.map((r) => (
+                                          <li
+                                            key={r.standard}
+                                            className="flex items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl"
+                                          >
+                                            <span className="text-sm text-slate-700">{r.standard}</span>
+                                            <span className="text-xs font-mono font-bold text-slate-500 whitespace-nowrap">
+                                              {r.questionCount} q
+                                            </span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                       </div>
+
+                       <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
+                          <div>
+                            <h3 className="text-lg font-bold text-slate-800">Most Missed Questions</h3>
+                            <p className="text-sm text-slate-500">Where the class struggled most — start reteaching here.</p>
+                          </div>
+                          {metricsData.questionStats?.length ? (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm">
+                                <thead>
+                                  <tr className="text-left text-[11px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">
+                                    <th scope="col" className="py-2 pr-4">Question</th>
+                                    <th scope="col" className="py-2 px-4 whitespace-nowrap">Concept</th>
+                                    <th scope="col" className="py-2 px-4 text-right whitespace-nowrap">Correct</th>
+                                    <th scope="col" className="py-2 pl-4 text-right whitespace-nowrap">Missed</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {metricsData.questionStats.map((q: any) => (
+                                    <tr key={q.id} className="border-b border-slate-100 last:border-0">
+                                      <td className="py-3 pr-4 text-slate-800 max-w-md">{q.question}</td>
+                                      <td className="py-3 px-4 whitespace-nowrap">
+                                        <span className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold">
+                                          {String(q.concept).replace(/_/g, " ")}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 px-4 text-right font-mono text-slate-600 whitespace-nowrap">
+                                        {q.correct}/{q.attempted}
+                                      </td>
+                                      <td className="py-3 pl-4 text-right whitespace-nowrap">
+                                        <span className={cn(
+                                          "font-bold font-mono",
+                                          q.percentMissed >= 50 ? "text-rose-600"
+                                            : q.percentMissed >= 25 ? "text-amber-600"
+                                            : "text-emerald-600",
+                                        )}>
+                                          {q.percentMissed}%
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-slate-500 text-sm">No question data yet — results appear once students have answered.</p>
+                          )}
+                       </div>
+
+                       <div className="p-6 bg-white border border-slate-200 rounded-3xl shadow-sm space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-lg font-bold text-slate-800">Student Profiles & Assessment Logs</h3>
+                            <button
+                              onClick={downloadResultsCsv}
+                              disabled={!metricsData.students?.length}
+                              title="Export results as a CSV for your gradebook"
+                              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-slate-700 font-bold rounded-xl transition-colors text-sm flex items-center gap-2"
+                            >
+                              Download CSV
+                            </button>
+                          </div>
                           <div className="grid gap-4">
                             {metricsData.students?.map((s: any) => (
                               <div key={s.uid} className="p-4 bg-slate-50 rounded-2xl flex flex-col md:flex-row gap-6 border border-slate-200">
@@ -2533,5 +2825,6 @@ export default function App() {
         SESSION ID: {roomId || "SECURE"} // ENCRYPTION: AES-256
       </footer>
     </div>
+    </MotionConfig>
   );
 }

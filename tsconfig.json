@@ -9,6 +9,7 @@
       "DOM",
       "DOM.Iterable"
     ],
+    "strict": true,
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
@@ -24,5 +25,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["node_modules", "dist", "src/worker"]
+  "exclude": ["node_modules", "dist", "src/worker", "tests"]
 }

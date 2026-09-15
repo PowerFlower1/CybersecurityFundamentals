@@ -1,7 +1,37 @@
 export type QuestionType = 'mcq';
 
+/** Concept ids, kept in sync with CONCEPTS in components/SoloMap.tsx. */
+export type ConceptId =
+  | 'art_of_defending'
+  | 'confidentiality'
+  | 'integrity'
+  | 'availability'
+  | 'authentication';
+
+/**
+ * External framework alignment for a question.
+ *
+ * These are recorded at DOMAIN / CATEGORY level, not at individual objective
+ * level. Domain-level mapping is defensible for an introductory module and is
+ * what a district or funder usually asks for ("which Security+ domains does
+ * this cover?"). If you need objective-level citations (e.g. Security+ 4.6, or
+ * NICE TKS statement ids), have a curriculum SME add them — do not infer them.
+ */
+export interface QuestionStandards {
+  /** CompTIA Security+ SY0-701 domains, e.g. "1.0 General Security Concepts". */
+  securityPlus?: string[];
+  /** NICE Framework workforce categories, e.g. "Protection and Defense". */
+  nice?: string[];
+}
+
 export interface Question {
   id: string;
+  /**
+   * Which of the five core concepts this question belongs to. The solo
+   * campaign filters on this, so questions can be added to any concept in any
+   * order without disturbing the others.
+   */
+  concept: ConceptId;
   type: QuestionType;
   question: string;
   imageUrl?: string;
@@ -9,12 +39,15 @@ export interface Question {
   correctAnswer: string;
   explanation: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  /** Optional framework alignment, shown to learners and summarised for staff. */
+  standards?: QuestionStandards;
 }
 
 export const CYBER_QUESTIONS: Question[] = [
   // 1. Art of Defending (Defense in Depth)
   {
     id: '1',
+    concept: 'art_of_defending',
     type: 'mcq',
     question: 'You are a junior admin for an online store. It is black Friday and you suspect hackers might try to breach the network. To protect customer data, what is your first step?',
     options: [
@@ -29,6 +62,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '2',
+    concept: 'art_of_defending',
     type: 'mcq',
     question: 'You notice a suspicious login attempt on the CEO\'s email account from an unrecognized location. Following the "Art of Defending" principles, what should you do immediately?',
     options: [
@@ -43,6 +77,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '3',
+    concept: 'art_of_defending',
     type: 'mcq',
     question: 'Your company just bought a new cloud server. The vendor says it is "unhackable." As an analyst practicing the Art of Defending, how do you handle this?',
     options: [
@@ -59,6 +94,7 @@ export const CYBER_QUESTIONS: Question[] = [
   // 2. Confidentiality
   {
     id: '4',
+    concept: 'confidentiality',
     type: 'mcq',
     question: 'You are working at a hospital processing patient records. A doctor urgently asks you to email a patient\'s medical file to their personal Gmail. How do you maintain Confidentiality?',
     options: [
@@ -73,6 +109,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '5',
+    concept: 'confidentiality',
     type: 'mcq',
     question: 'You are setting up a database for HR containing employee salaries. To protect this data if the server is physically stolen, what must you do?',
     options: [
@@ -87,6 +124,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '6',
+    concept: 'confidentiality',
     type: 'mcq',
     question: 'You are presenting a highly confidential quarterly earnings report in a glass-walled conference room. People are walking by. How do you protect confidentiality?',
     options: [
@@ -103,6 +141,7 @@ export const CYBER_QUESTIONS: Question[] = [
   // 3. Integrity
   {
     id: '7',
+    concept: 'integrity',
     type: 'mcq',
     question: 'You manage the payroll system. An employee calls saying their direct deposit routing number was mysteriously changed. Which security concept has been violated?',
     options: [
@@ -117,6 +156,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '8',
+    concept: 'integrity',
     type: 'mcq',
     question: 'You are sending a software update to millions of users. How can you prove to their computers that the update hasn\'t been tampered with by a hacker?',
     options: [
@@ -131,6 +171,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '9',
+    concept: 'integrity',
     type: 'mcq',
     question: 'A malicious insider tries to quietly alter the logs of a server to hide the fact they downloaded sensitive files. What mechanism ensures Integrity of the logs?',
     options: [
@@ -147,6 +188,7 @@ export const CYBER_QUESTIONS: Question[] = [
   // 4. Availability
   {
     id: '10',
+    concept: 'availability',
     type: 'mcq',
     question: 'It’s launch day for your new video game. Suddenly, millions of fake requests flood your servers, causing them to crash. Legitimate players cannot log in. What concept failed?',
     options: [
@@ -161,6 +203,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '11',
+    concept: 'availability',
     type: 'mcq',
     question: 'A severe thunderstorm knocks out power to your company\'s primary data center. How do you ensure Availability of your customer-facing website?',
     options: [
@@ -175,6 +218,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '12',
+    concept: 'availability',
     type: 'mcq',
     question: 'Ransomware has encrypted your company\'s main file server. The hackers demand Bitcoin for the decryption key. How do you restore Availability without paying?',
     options: [
@@ -191,6 +235,7 @@ export const CYBER_QUESTIONS: Question[] = [
   // 5. Authentication
   {
     id: '13',
+    concept: 'authentication',
     type: 'mcq',
     question: 'You are setting up a secure portal for remote workers. Users keep using weak passwords like "password123". How do you strengthen Authentication?',
     options: [
@@ -205,6 +250,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '14',
+    concept: 'authentication',
     type: 'mcq',
     question: 'An employee lost their badge, which they use to tap into the building. A stranger picks it up and tries to enter. How do you enforce Authentication to stop them?',
     options: [
@@ -219,6 +265,7 @@ export const CYBER_QUESTIONS: Question[] = [
   },
   {
     id: '15',
+    concept: 'authentication',
     type: 'mcq',
     question: 'A hacker is trying to impersonate the company\'s database server by returning a fake IP address to client requests. How does the client Authenticate the real server?',
     options: [
