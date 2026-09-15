@@ -48,6 +48,7 @@ import {
 } from "./lib/campaign";
 import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
+import { FishingGame } from "./components/FishingGame";
 import {
   api,
   getInstructorToken,
@@ -138,6 +139,9 @@ export default function App() {
   const [activeCampaignConcept, setActiveCampaignConcept] = useState<string | null>(null);
   // When set, the next round replays only these (previously missed) questions.
   const [retryQuestions, setRetryQuestions] = useState<Question[] | null>(null);
+  // False during the cast/hook/reel beats; the per-question timer only runs
+  // once the question is actually on screen.
+  const [questionReady, setQuestionReady] = useState(false);
   // Solo practice settings, independent of the hosted-session difficulty.
   const [soloDifficulty, setSoloDifficulty] = useState<SoloDifficulty>("all");
   // True while playing an all-topics round rather than a single skill.
@@ -691,6 +695,7 @@ export default function App() {
 
   const resetQuestionState = () => {
     setTimeLeft(activeTimePerQuestion);
+    setQuestionReady(false); // held until the fishing loop reveals the question
     setUserAnswer("");
     setShowExplanation(false);
     setIsCorrect(null);
@@ -709,7 +714,7 @@ export default function App() {
   useEffect(() => {
     // Untimed sessions never count down and never auto-submit, so learners
     // who need extended time can work at their own pace.
-    if (gameState === "playing" && !showExplanation && !isUntimed) {
+    if (gameState === "playing" && !showExplanation && !isUntimed && questionReady) {
       if (timeLeft > 0) {
         timerRef.current = setTimeout(() => {
           if (timeLeft <= 6) {
@@ -725,7 +730,7 @@ export default function App() {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [timeLeft, gameState, showExplanation, isUntimed]);
+  }, [timeLeft, gameState, showExplanation, isUntimed, questionReady]);
 
   const handleAnswerSubmit = (answer: string) => {
     if (showExplanation) return;
@@ -1984,88 +1989,16 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex-1 flex flex-col justify-center">
-                <motion.div
-                  key={currentQuestion.id}
-                  initial={{ x: 20, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  className="space-y-8"
-                >
-                  <div className="space-y-4 text-center max-w-2xl mx-auto">
-                    <span className="px-3 py-1 bg-white/5 rounded-full border border-white/10 text-[10px] font-mono uppercase text-emerald-500">
-                      SEC-LEVEL: {currentQuestion.difficulty}
-                    </span>
-
-                    {currentQuestion.imageUrl && (
-                      <div className="relative w-full aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-xl mx-auto mt-6 mb-4 bg-black/40">
-                        <img
-                          src={currentQuestion.imageUrl}
-                          alt="Mission intel visual"
-                          className="w-full h-full object-contain"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                    )}
-
-                    <h2 className="text-2xl lg:text-3xl font-bold leading-tight tracking-tight text-white">
-                      {currentQuestion.question}
-                    </h2>
-                  </div>
-
-                  <div className="grid gap-4 max-w-xl mx-auto w-full">
-                    {currentQuestion.type === "mcq" &&
-                      currentQuestion.options?.map((option, idx) => (
-                        <motion.button
-                          key={idx}
-                          disabled={showExplanation}
-                          onClick={() => handleAnswerSubmit(option)}
-                          whileHover={!showExplanation && !prefersReducedMotion ? { scale: 1.02 } : {}}
-                          whileTap={!showExplanation && !prefersReducedMotion ? { scale: 0.98 } : {}}
-                          animate={
-                            prefersReducedMotion
-                              ? {}
-                              : showExplanation &&
-                                  option === currentQuestion.correctAnswer
-                                ? {
-                                    scale: [1, 1.05, 1],
-                                    transition: { duration: 0.3 },
-                                  }
-                                : showExplanation &&
-                                    isCorrect === false &&
-                                    userAnswer === option
-                                  ? {
-                                      x: [-10, 10, -10, 10, 0],
-                                      transition: { duration: 0.4 },
-                                    }
-                                  : {}
-                          }
-                          className={cn(
-                            "group relative p-5 bg-white/5 border border-white/10 text-left rounded-2xl transition-colors",
-                            "focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#050505]",
-                            !showExplanation
-                              ? "hover:border-emerald-500/50 hover:bg-emerald-500/5"
-                              : option === currentQuestion.correctAnswer
-                                ? "border-emerald-500 bg-emerald-500/10 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)] z-10"
-                                : isCorrect === false && userAnswer === option
-                                  ? "border-rose-500 bg-rose-500/10 text-rose-400 shadow-[0_0_15px_rgba(244,63,94,0.2)] z-10"
-                                  : "opacity-50",
-                          )}
-                        >
-                          <span className="font-medium">{option}</span>
-                          {showExplanation && (
-                            <span className="sr-only">
-                              {option === currentQuestion.correctAnswer
-                                ? " — correct answer"
-                                : userAnswer === option
-                                  ? " — your answer, incorrect"
-                                  : ""}
-                            </span>
-                          )}
-                        </motion.button>
-                      ))}
-                  </div>
-                </motion.div>
-              </div>
+              <FishingGame
+                key={currentQuestion.id}
+                question={currentQuestion}
+                showExplanation={showExplanation}
+                isCorrect={isCorrect}
+                userAnswer={userAnswer}
+                onAnswer={handleAnswerSubmit}
+                reducedMotion={!!prefersReducedMotion}
+                onQuestionReady={() => setQuestionReady(true)}
+              />
 
               {/* Screen-reader announcement of the result. Visually hidden
                   because the same information is conveyed on screen. */}
