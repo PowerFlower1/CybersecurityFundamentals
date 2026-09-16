@@ -21,7 +21,7 @@ export function FishingScene({ phase, reducedMotion }: FishingSceneProps) {
         viewBox="0 0 800 340"
         className="w-full h-auto block"
         role="img"
-        aria-label="A cyber analyst casting a line into a dark data ocean"
+        aria-label="Byte, a friendly security robot, casting a line into a dark data ocean"
       >
         <defs>
           <linearGradient id="nightSky" x1="0" y1="0" x2="0" y2="1">
@@ -99,22 +99,47 @@ export function FishingScene({ phase, reducedMotion }: FishingSceneProps) {
         <rect x="52" y="214" width="16" height="54" fill="#0f172a" />
         <rect x="168" y="214" width="16" height="54" fill="#0f172a" />
 
-        {/* Analyst — shield head, brand blue */}
-        <g transform="translate(150 118)">
-          <rect x="6" y="52" width="54" height="46" rx="12" fill="#1e3a8a" />
-          <path
-            d="M33 2 L62 13 V38 C62 56 48 66 33 72 C18 66 4 56 4 38 V13 Z"
-            fill="#1d4ed8"
-            stroke="#60a5fa"
-            strokeWidth="2.5"
+        {/* Byte — the SOC robot. Original design. */}
+        <g transform="translate(150 112)">
+          {/* antenna */}
+          <line x1="33" y1="10" x2="33" y2="-6" stroke="#64748b" strokeWidth="3" strokeLinecap="round" />
+          <motion.circle
+            cx="33"
+            cy="-9"
+            r="4"
+            fill="#22d3ee"
+            initial={false}
+            animate={reducedMotion ? { opacity: 1 } : { opacity: [0.4, 1, 0.4] }}
+            transition={reducedMotion ? {} : { duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
           />
-          {/* keyhole emblem */}
-          <circle cx="33" cy="32" r="7" fill="#7dd3fc" />
-          <rect x="30" y="36" width="6" height="12" rx="3" fill="#7dd3fc" />
-          {/* visor eyes */}
-          <circle cx="24" cy="23" r="3.2" fill="#0b1220" />
-          <circle cx="42" cy="23" r="3.2" fill="#0b1220" />
-          <rect x="52" y="62" width="26" height="9" rx="4.5" fill="#1e3a8a" transform="rotate(-24 52 62)" />
+
+          {/* body */}
+          <rect x="8" y="56" width="50" height="46" rx="14" fill="#1e3a8a" />
+          {/* chest indicator */}
+          <rect x="26" y="70" width="14" height="5" rx="2.5" fill="#22d3ee" fillOpacity="0.85" />
+          <rect x="26" y="79" width="9" height="4" rx="2" fill="#38bdf8" fillOpacity="0.55" />
+
+          {/* head */}
+          <rect x="4" y="10" width="58" height="46" rx="15" fill="#1d4ed8" stroke="#60a5fa" strokeWidth="2.5" />
+          {/* visor band */}
+          <rect x="11" y="24" width="44" height="18" rx="9" fill="#0b1220" />
+          <motion.g
+            initial={false}
+            animate={reducedMotion ? { opacity: 1 } : { opacity: [0.75, 1, 0.75] }}
+            transition={reducedMotion ? {} : { duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <circle cx="24" cy="33" r="4.6" fill="#22d3ee" />
+            <circle cx="42" cy="33" r="4.6" fill="#22d3ee" />
+            <circle cx="25.4" cy="31.4" r="1.5" fill="#ecfeff" />
+            <circle cx="43.4" cy="31.4" r="1.5" fill="#ecfeff" />
+          </motion.g>
+          {/* headphones */}
+          <rect x="-1" y="26" width="7" height="16" rx="3.5" fill="#334155" />
+          <rect x="60" y="26" width="7" height="16" rx="3.5" fill="#334155" />
+
+          {/* arm holding the rod */}
+          <rect x="50" y="66" width="28" height="9" rx="4.5" fill="#1e3a8a" transform="rotate(-24 50 66)" />
+          <circle cx="74" cy="55" r="5" fill="#2563eb" />
         </g>
 
         {/* Rod + line */}
