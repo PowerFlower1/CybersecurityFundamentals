@@ -236,10 +236,25 @@ describe("GlobalDO", () => {
 
   it("stores and returns a custom question bank", async () => {
     const g = new GlobalDO(fakeState());
-    const custom = [{ id: "1", question: "Q?", correctAnswer: "A" }];
+    // A non-colliding id, so this asserts round-tripping rather than the
+    // reconcile-by-id repair (covered in tests/questions.test.ts).
+    const custom = [{ id: "custom-1", question: "Q?", correctAnswer: "A" }];
     await g.fetch(req("questions:set", { questions: custom }));
     const { questions }: any = await (await g.fetch(req("questions:get"))).json();
     expect(questions).toEqual(custom);
+  });
+
+  it("repairs a stored bank that predates the concept field", async () => {
+    const g = new GlobalDO(fakeState());
+    const stale = CYBER_QUESTIONS.map(({ concept, ...rest }) => rest as any);
+    await g.fetch(req("questions:set", { questions: stale }));
+
+    const { questions }: any = await (await g.fetch(req("questions:get"))).json();
+    expect(questions.every((q: any) => !!q.concept)).toBe(true);
+
+    // The repair is persisted, so it happens once rather than on every read.
+    const again: any = await (await g.fetch(req("questions:get"))).json();
+    expect(again.questions.every((q: any) => !!q.concept)).toBe(true);
   });
 
   it("stores an empty array (not the fallback) when questions is not an array", async () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   selectConceptQuestions,
+  reconcileBank,
   selectSoloQuestions,
   difficultyAvailability,
   SOLO_DIFFICULTIES,
@@ -183,5 +184,63 @@ describe("difficultyAvailability", () => {
   it("reports zero for a concept with no questions", () => {
     const counts = difficultyAvailability(CYBER_QUESTIONS, "not_a_concept");
     expect(counts).toEqual({ all: 0, easy: 0, medium: 0, hard: 0 });
+  });
+});
+
+describe("reconcileBank", () => {
+  // Reproduces the production fault: GlobalDO was serving a bank saved before
+  // questions carried a `concept`, so concept filtering, the standards report
+  // and item analysis all had nothing to group by.
+  const stale = CYBER_QUESTIONS.map(({ concept, standards, ...rest }) => rest as any);
+
+  it("detects and repairs a bank saved before the concept field existed", () => {
+    expect(stale.every((q: any) => q.concept === undefined)).toBe(true);
+
+    const { questions, repaired } = reconcileBank(stale, CYBER_QUESTIONS);
+    expect(repaired).toBe(true);
+    expect(questions.every((q) => !!q.concept)).toBe(true);
+  });
+
+  it("restores concept filtering for every concept after repair", () => {
+    // Before: the stale bank yields nothing for any concept.
+    for (const id of CONCEPT_IDS) {
+      expect(selectConceptQuestions(stale, id)).toHaveLength(0);
+    }
+    // After: each concept serves its own questions again.
+    const { questions } = reconcileBank(stale, CYBER_QUESTIONS);
+    for (const id of CONCEPT_IDS) {
+      expect(selectConceptQuestions(questions, id).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("reports no repair needed for an already-current bank", () => {
+    const { questions, repaired } = reconcileBank(CYBER_QUESTIONS, CYBER_QUESTIONS);
+    expect(repaired).toBe(false);
+    expect(questions).toEqual(CYBER_QUESTIONS);
+  });
+
+  it("preserves instructor edits while patching metadata", () => {
+    const edited = stale.map((q: any) =>
+      q.id === "1" ? { ...q, question: "My reworded question", explanation: "My explanation" } : q,
+    );
+    const { questions } = reconcileBank(edited, CYBER_QUESTIONS);
+    const first = questions.find((q) => q.id === "1")!;
+    expect(first.question).toBe("My reworded question");
+    expect(first.explanation).toBe("My explanation");
+    expect(first.concept).toBe(CYBER_QUESTIONS.find((q) => q.id === "1")!.concept);
+  });
+
+  it("passes through custom questions that have no built-in counterpart", () => {
+    const custom = { id: "custom-1", type: "mcq", question: "Mine?", correctAnswer: "a", explanation: "", difficulty: "easy" };
+    const { questions } = reconcileBank([...stale, custom], CYBER_QUESTIONS);
+    expect(questions.find((q) => q.id === "custom-1")).toMatchObject({ id: "custom-1", question: "Mine?" });
+  });
+
+  it("falls back to the built-in bank for anything that is not an array", () => {
+    for (const bad of [null, undefined, "nope", 42, {}]) {
+      const { questions, repaired } = reconcileBank(bad, CYBER_QUESTIONS);
+      expect(questions).toEqual(CYBER_QUESTIONS);
+      expect(repaired).toBe(false);
+    }
   });
 });

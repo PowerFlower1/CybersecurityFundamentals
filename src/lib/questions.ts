@@ -62,3 +62,45 @@ export function selectConceptQuestions(
   if (!conceptId) return [];
   return bank.filter((q) => q.concept === conceptId);
 }
+
+/**
+ * Repair a persisted question bank against the built-in one.
+ *
+ * The Cloudflare GlobalDO stores the question bank, so a bank saved before a
+ * schema field existed keeps being served forever and silently disables every
+ * feature that depends on that field. This happened in production: a bank
+ * saved before questions carried a `concept` was still being served months
+ * later, which left concept filtering, the standards report and item analysis
+ * with nothing to group by.
+ *
+ * Rather than discard a stored bank (which would throw away instructor edits),
+ * fill in the metadata that is missing, matching on question id. Custom
+ * questions with no built-in counterpart are passed through untouched.
+ */
+export function reconcileBank(
+  stored: unknown,
+  builtIn: Question[],
+): { questions: Question[]; repaired: boolean } {
+  if (!Array.isArray(stored)) return { questions: builtIn, repaired: false };
+
+  const byId = new Map(builtIn.map((q) => [q.id, q]));
+  let repaired = false;
+
+  const questions = stored.map((raw: any) => {
+    const reference = byId.get(raw?.id);
+    if (!reference) return raw as Question;
+
+    const patched = { ...raw } as Question;
+    if (!patched.concept && reference.concept) {
+      patched.concept = reference.concept;
+      repaired = true;
+    }
+    if (!patched.standards && reference.standards) {
+      patched.standards = reference.standards;
+      repaired = true;
+    }
+    return patched;
+  });
+
+  return { questions, repaired };
+}
