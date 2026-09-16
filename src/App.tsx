@@ -49,6 +49,7 @@ import {
 import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
 import { GameShowHost } from "./components/GameShowHost";
+import { GameShowPlayer } from "./components/GameShowPlayer";
 import {
   api,
   getInstructorToken,
@@ -65,7 +66,17 @@ interface SessionUser {
   isAnonymous: boolean;
 }
 
-type GameState = "login" | "lobby" | "waiting" | "hosting" | "playing" | "results" | "admin_dashboard" | "campaign";
+type GameState =
+  | "login"
+  | "lobby"
+  | "waiting"
+  | "hosting"
+  | "playing"
+  /** Student view during a game-show session (team play, no per-question timer). */
+  | "gameshow_play"
+  | "results"
+  | "admin_dashboard"
+  | "campaign";
 
 // Per-session student identity, returned by the server on join.
 const PLAYER_KEY = "rfc_player";
@@ -124,6 +135,10 @@ export default function App() {
   const [gameShowTeamCount, setGameShowTeamCount] = useState(2);
   /** True while a spin / next-turn request is in flight. */
   const [gameShowBusy, setGameShowBusy] = useState(false);
+  /** Student side: outcome of this player's last game-show answer. */
+  const [gameShowResult, setGameShowResult] = useState<{ correct: boolean; correctAnswer: string } | null>(null);
+  /** Question id this student's team has already answered. */
+  const [answeredQuestionId, setAnsweredQuestionId] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
@@ -336,7 +351,13 @@ export default function App() {
         } else {
           clearInterval(interval);
           setCountdown(null);
-          startGameLocally();
+          // Game-show sessions are host-paced with no per-question timer, so
+          // students go to the team view rather than the solo quiz loop.
+          if (roomData?.mode === "gameshow") {
+            setGameState("gameshow_play");
+          } else {
+            startGameLocally();
+          }
         }
       }, 1000);
       return () => clearInterval(interval);
@@ -486,6 +507,16 @@ export default function App() {
     }
   };
 
+  // Clear the student's answer feedback once the host moves to a new question
+  // or ends the turn, so stale feedback never sits under a fresh question.
+  useEffect(() => {
+    const qid = roomData?.gameshow?.questionId ?? null;
+    if (qid !== answeredQuestionId) {
+      setGameShowResult(null);
+      if (qid === null) setAnsweredQuestionId(null);
+    }
+  }, [roomData?.gameshow?.questionId, roomData?.gameshow?.phase]);
+
   // ---- Game show host controls -----------------------------------------
   const handleSpin = async () => {
     if (!roomId || gameShowBusy) return;
@@ -494,6 +525,23 @@ export default function App() {
       setRoomData(await api.spin(roomId));
     } catch (error) {
       console.error("Spin failed:", error);
+    } finally {
+      setGameShowBusy(false);
+    }
+  };
+
+  /** Student submits an answer for their team. */
+  const handleGameShowAnswer = async (option: string) => {
+    const info = playerInfoRef.current;
+    if (!info || !roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      const res = await api.answerGameShow(roomId, info.id, info.token, option);
+      setGameShowResult({ correct: res.correct, correctAnswer: res.correctAnswer });
+      setAnsweredQuestionId(res.room.gameshow?.questionId ?? null);
+      setRoomData(res.room);
+    } catch (error) {
+      console.error("Answer failed:", error);
     } finally {
       setGameShowBusy(false);
     }
@@ -1904,6 +1952,28 @@ export default function App() {
                   </>
                 );
               })()}
+            </motion.div>
+          )}
+
+          {gameState === "gameshow_play" && roomData?.gameshow && (
+            <motion.div
+              key="gameshow_play"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex-1 flex flex-col"
+            >
+              <GameShowPlayer
+                gameshow={roomData.gameshow}
+                myTeamId={roomData.players?.find((p: any) => p.id === user?.uid)?.teamId}
+                playerName={user?.displayName ?? undefined}
+                lastResult={gameShowResult}
+                submitting={gameShowBusy}
+                answered={
+                  !!roomData.gameshow.questionId &&
+                  answeredQuestionId === roomData.gameshow.questionId
+                }
+                onAnswer={handleGameShowAnswer}
+              />
             </motion.div>
           )}
 
