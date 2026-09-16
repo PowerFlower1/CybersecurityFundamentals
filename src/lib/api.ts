@@ -12,15 +12,38 @@ export interface RoomPlayer {
   name: string;
   score: number;
 }
+/** A question as sent to clients — deliberately without the answer key. */
+export interface PublicQuestion {
+  id: string;
+  question: string;
+  options?: string[];
+  concept?: string;
+  difficulty?: string;
+}
+
+export interface GameShowView {
+  teams: { id: string; name: string; color: string; score: number }[];
+  turnIndex: number;
+  phase: "idle" | "question" | "resolved";
+  spin: { id: string; kind: string; value: number; label: string } | null;
+  questionId: string | null;
+  question: PublicQuestion | null;
+  doubleNext: boolean;
+  lastOutcome: string | null;
+  turnsTaken: number;
+}
+
 export interface RoomState {
   code: string;
   status: "waiting" | "started" | "finished";
+  mode?: "quiz" | "gameshow";
   difficulty: string;
   questionCount: number;
   timePerQuestion: number;
   endTime: number;
   hostName: string;
   players: RoomPlayer[];
+  gameshow?: GameShowView;
 }
 
 async function req(path: string, options: RequestInit = {}, auth = false) {
@@ -63,8 +86,31 @@ export const api = {
     questionCount: number;
     timePerQuestion: number;
     hostName?: string;
+    mode?: "quiz" | "gameshow";
+    teamCount?: number;
   }): Promise<{ code: string }> =>
     req("/api/session", { method: "POST", body: JSON.stringify(settings) }, true),
+
+  // ---- Game show -------------------------------------------------------
+  /** Host spins the wheel for the active team. */
+  spin: (code: string): Promise<RoomState> =>
+    req(`/api/session/${code}/spin`, { method: "POST", body: "{}" }, true),
+
+  /** Host hands play to the next team. */
+  nextTurn: (code: string): Promise<RoomState> =>
+    req(`/api/session/${code}/next-turn`, { method: "POST", body: "{}" }, true),
+
+  /** A player on the active team answers the question in play. */
+  answerGameShow: (
+    code: string,
+    playerId: string,
+    playerToken: string,
+    answer: string,
+  ): Promise<{ correct: boolean; correctAnswer: string; room: RoomState }> =>
+    req(`/api/session/${code}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ playerId, playerToken, answer }),
+    }),
 
   listSessions: (): Promise<{ sessions: any[] }> => req("/api/sessions", {}, true),
 

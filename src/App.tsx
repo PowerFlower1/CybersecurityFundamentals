@@ -48,6 +48,7 @@ import {
 } from "./lib/campaign";
 import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
+import { GameShowHost } from "./components/GameShowHost";
 import {
   api,
   getInstructorToken,
@@ -119,6 +120,10 @@ export default function App() {
   const [joinError, setJoinError] = useState("");
   const [hostError, setHostError] = useState("");
   const [isHosting, setIsHosting] = useState(false);
+  /** Number of teams for a game-show session. */
+  const [gameShowTeamCount, setGameShowTeamCount] = useState(2);
+  /** True while a spin / next-turn request is in flight. */
+  const [gameShowBusy, setGameShowBusy] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
@@ -421,7 +426,7 @@ export default function App() {
     }
   };
 
-  const createRoom = async () => {
+  const createRoom = async (mode: "quiz" | "gameshow" = "quiz") => {
     if (!isAdmin || isHosting) return;
     setHostError("");
     setIsHosting(true);
@@ -431,6 +436,8 @@ export default function App() {
         questionCount: numberOfQuestions,
         timePerQuestion,
         hostName: user?.displayName || "Instructor",
+        mode,
+        teamCount: gameShowTeamCount,
       });
       // The host monitors the session; they do not join as a player.
       setRoomId(code);
@@ -476,6 +483,31 @@ export default function App() {
       await api.startSession(roomId, sessionDurationMinutes);
     } catch (error) {
       console.error("Failed to start session:", error);
+    }
+  };
+
+  // ---- Game show host controls -----------------------------------------
+  const handleSpin = async () => {
+    if (!roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      setRoomData(await api.spin(roomId));
+    } catch (error) {
+      console.error("Spin failed:", error);
+    } finally {
+      setGameShowBusy(false);
+    }
+  };
+
+  const handleNextTurn = async () => {
+    if (!roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      setRoomData(await api.nextTurn(roomId));
+    } catch (error) {
+      console.error("Next turn failed:", error);
+    } finally {
+      setGameShowBusy(false);
     }
   };
 
@@ -839,7 +871,10 @@ export default function App() {
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
-        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "hosting" || gameState === "campaign")
+        // The game-show projector reads better on the dark stage treatment,
+        // so it opts out of the light chrome the other host screens use.
+        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "campaign" ||
+          (gameState === "hosting" && !(roomData?.mode === "gameshow" && roomData?.status === "started")))
           ? "bg-slate-50 text-slate-900 overflow-y-auto"
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
@@ -1377,7 +1412,7 @@ export default function App() {
                 <motion.button
                   whileHover={{ scale: 1.01, translateY: -2 }}
                   whileTap={{ scale: 0.99 }}
-                  onClick={createRoom}
+                  onClick={() => createRoom("quiz")}
                   className="group relative w-full flex flex-col md:flex-row items-center gap-6 p-8 md:p-10 bg-white border border-slate-200 rounded-3xl text-center md:text-left hover:shadow-xl hover:border-blue-200 transition-all shadow-md shadow-slate-200/50"
                 >
                   <div className="p-5 bg-blue-50 text-blue-600 rounded-2xl group-hover:scale-110 group-hover:bg-blue-100 transition-all duration-300 shrink-0">
@@ -1405,6 +1440,49 @@ export default function App() {
                     Students join from the home page using your session code.
                   </p>
                 )}
+
+                {/* Game-show mode: team play around a projected wheel. */}
+                <div className="mt-6 p-6 bg-slate-900 text-white rounded-3xl space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="p-4 bg-amber-400/15 text-amber-300 rounded-2xl shrink-0">
+                      <Trophy className="w-7 h-7" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-xl font-bold">Host a Game Show</h3>
+                      <p className="text-sm text-slate-400">
+                        Teams take turns spinning a wheel on the projector. Put this
+                        screen on the board and let students answer from their devices.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+                      Teams
+                    </span>
+                    {[2, 3, 4].map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setGameShowTeamCount(n)}
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-sm font-bold border transition-all",
+                          gameShowTeamCount === n
+                            ? "bg-amber-400 text-black border-amber-300"
+                            : "bg-white/5 text-slate-300 border-white/10 hover:bg-white/10",
+                        )}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => createRoom("gameshow")}
+                      disabled={isHosting}
+                      className="ml-auto px-6 py-3 rounded-xl bg-amber-400 text-black font-black hover:bg-amber-300 disabled:opacity-50 transition-colors"
+                    >
+                      {isHosting ? "Starting…" : "Start Game Show"}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Concept Info Footer Grid */}
@@ -1555,6 +1633,22 @@ export default function App() {
                 const ended =
                   roomData?.status === "finished" || sessionTimeLeft === 0;
                 const live = started && !ended;
+
+                // Game-show sessions get the projector view once started.
+                if (roomData?.mode === "gameshow" && roomData.gameshow && started && !ended) {
+                  return (
+                    <GameShowHost
+                      code={roomId}
+                      gameshow={roomData.gameshow}
+                      playerCount={players.length}
+                      onSpin={handleSpin}
+                      onNextTurn={handleNextTurn}
+                      onEnd={endRoomGame}
+                      busy={gameShowBusy}
+                      reducedMotion={!!prefersReducedMotion}
+                    />
+                  );
+                }
 
                 return (
                   <>
