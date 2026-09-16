@@ -299,3 +299,176 @@ describe("GlobalDO", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Game-show mode inside the Durable Object. This is the only way to verify the
+// Cloudflare path on a machine where wrangler/workerd cannot run, so it mirrors
+// the flow that was exercised over HTTP against the Node server.
+// ---------------------------------------------------------------------------
+describe("RoomDO — game-show mode", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Force the wheel (and question pick) to be deterministic. */
+  const fixRandom = (value: number) => vi.spyOn(Math, "random").mockReturnValue(value);
+
+  async function newGame(teamCount = 2) {
+    const room = new RoomDO(fakeState());
+    await room.fetch(
+      req("create", {
+        code: "GS1",
+        mode: "gameshow",
+        teamCount,
+        difficulty: "all",
+        questions: CYBER_QUESTIONS,
+      }),
+    );
+    return room;
+  }
+
+  async function join(room: RoomDO, name: string) {
+    return (await (await room.fetch(req("join", { name }))).json()) as any;
+  }
+
+  it("creates a game-show room with teams", async () => {
+    const room = await newGame(3);
+    const state: any = await (await room.fetch(req("state"))).json();
+    expect(state.mode).toBe("gameshow");
+    expect(state.gameshow.teams).toHaveLength(3);
+    expect(state.gameshow.phase).toBe("idle");
+  });
+
+  it("balances joining players across teams", async () => {
+    const room = await newGame(2);
+    const ids = [];
+    for (const n of ["A", "B", "C", "D"]) ids.push((await join(room, n)).teamId);
+    expect(ids.filter((t) => t === "blue")).toHaveLength(2);
+    expect(ids.filter((t) => t === "red")).toHaveLength(2);
+  });
+
+  it("puts a question in play on a points spin, without its answer key", async () => {
+    const room = await newGame();
+    await join(room, "A");
+    fixRandom(0); // segment 0 is a points segment
+    const state: any = await (await room.fetch(req("spin", {}))).json();
+    expect(state.gameshow.phase).toBe("question");
+    expect(state.gameshow.question).toBeTruthy();
+    expect(state.gameshow.question).not.toHaveProperty("correctAnswer");
+    expect(state.gameshow.question.options.length).toBeGreaterThan(1);
+  });
+
+  it("rejects a second spin while a turn is unresolved", async () => {
+    const room = await newGame();
+    await join(room, "A");
+    fixRandom(0);
+    await room.fetch(req("spin", {}));
+    const res = await room.fetch(req("spin", {}));
+    expect(res.status).toBe(409);
+  });
+
+  it("scores a correct answer from the active team", async () => {
+    const room = await newGame();
+    const a = await join(room, "A"); // blue, goes first
+    fixRandom(0);
+    const spun: any = await (await room.fetch(req("spin", {}))).json();
+    const value = spun.gameshow.spin.value;
+    const answer = spun.gameshow.question.options.find(
+      (o: string) => o === CYBER_QUESTIONS.find((q) => q.id === spun.gameshow.question.id)!.correctAnswer,
+    );
+
+    const res = await room.fetch(
+      req("answer", { playerId: a.playerId, playerToken: a.playerToken, answer }),
+    );
+    const body: any = await res.json();
+    expect(body.correct).toBe(true);
+    expect(body.room.gameshow.teams[0].score).toBe(value);
+  });
+
+  it("awards nothing for a wrong answer but still reveals the key to that player", async () => {
+    const room = await newGame();
+    const a = await join(room, "A");
+    fixRandom(0);
+    await room.fetch(req("spin", {}));
+    const body: any = await (
+      await room.fetch(req("answer", { playerId: a.playerId, playerToken: a.playerToken, answer: "definitely wrong" }))
+    ).json();
+    expect(body.correct).toBe(false);
+    expect(body.correctAnswer).toBeTruthy();
+    expect(body.room.gameshow.teams[0].score).toBe(0);
+  });
+
+  it("rejects a player from a team whose turn it is not", async () => {
+    const room = await newGame();
+    await join(room, "A"); // blue
+    const b = await join(room, "B"); // red
+    fixRandom(0);
+    await room.fetch(req("spin", {}));
+    const res = await room.fetch(
+      req("answer", { playerId: b.playerId, playerToken: b.playerToken, answer: "x" }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects an answer with a bad player token", async () => {
+    const room = await newGame();
+    const a = await join(room, "A");
+    fixRandom(0);
+    await room.fetch(req("spin", {}));
+    const res = await room.fetch(req("answer", { playerId: a.playerId, playerToken: "nope", answer: "x" }));
+    expect(res.status).toBe(403);
+  });
+
+  it("rejects an answer when no question is in play", async () => {
+    const room = await newGame();
+    const a = await join(room, "A");
+    const res = await room.fetch(req("answer", { playerId: a.playerId, playerToken: a.playerToken, answer: "x" }));
+    expect(res.status).toBe(409);
+  });
+
+  it("resolves a hazard spin with no question", async () => {
+    const room = await newGame();
+    await join(room, "A");
+    fixRandom(2 / 12); // segment 2 is Lose a Turn
+    const state: any = await (await room.fetch(req("spin", {}))).json();
+    expect(state.gameshow.phase).toBe("resolved");
+    expect(state.gameshow.question).toBeNull();
+    expect(state.gameshow.lastOutcome).toMatch(/lost a turn/i);
+  });
+
+  it("hands play to the next team and clears the turn", async () => {
+    const room = await newGame();
+    await join(room, "A");
+    fixRandom(0);
+    await room.fetch(req("spin", {}));
+    const state: any = await (await room.fetch(req("next-turn", {}))).json();
+    expect(state.gameshow.turnIndex).toBe(1);
+    expect(state.gameshow.phase).toBe("idle");
+    expect(state.gameshow.question).toBeNull();
+  });
+
+  it("does not reuse a question within a game", async () => {
+    const room = await newGame();
+    await join(room, "A");
+    const seen = new Set<string>();
+    for (let i = 0; i < 5; i++) {
+      fixRandom(0);
+      const s: any = await (await room.fetch(req("spin", {}))).json();
+      if (s.gameshow.question) {
+        expect(seen.has(s.gameshow.question.id)).toBe(false);
+        seen.add(s.gameshow.question.id);
+      }
+      await room.fetch(req("next-turn", {}));
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
+  it("refuses game-show actions on an ordinary quiz room", async () => {
+    const room = new RoomDO(fakeState());
+    await room.fetch(req("create", { code: "Q1" })); // defaults to quiz mode
+    for (const action of ["spin", "next-turn", "answer"]) {
+      const res = await room.fetch(req(action, {}));
+      expect(res.status, `${action} on a quiz room`).toBe(409);
+    }
+  });
+});
