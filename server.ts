@@ -7,6 +7,16 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { CYBER_QUESTIONS, type Question } from "./src/constants";
 import { computeMetrics } from "./src/lib/metrics";
 import { normalizeTimePerQuestion } from "./src/lib/session-settings";
+import {
+  type GameShowState,
+  createGameShowState,
+  assignTeam,
+  spinWheel,
+  applySpin,
+  applyAnswer,
+  nextTurn,
+  activeTeam,
+} from "./src/lib/gameshow";
 
 // ---------------------------------------------------------------------------
 // Auth: a single shared instructor password, exchanged for a signed token.
@@ -79,7 +89,9 @@ function isRateLimited(key: string, limit: number, windowMs: number): boolean {
 // server; use a shared store (Redis/DB) if you scale horizontally.
 // ---------------------------------------------------------------------------
 interface HistoryEntry {
-  question?: { difficulty?: string; question?: string };
+  // `id` and `concept` are what the metrics item-analysis groups by, so keep
+  // this in step with MetricsHistoryEntry in src/lib/metrics.ts.
+  question?: { id?: string; question?: string; concept?: string; difficulty?: string };
   correct?: boolean;
   timeTaken?: number;
 }
@@ -89,10 +101,14 @@ interface Player {
   name: string;
   score: number;
   history: HistoryEntry[];
+  /** Game-show mode only: which team this player plays for. */
+  teamId?: string;
 }
 interface Room {
   code: string;
   status: "waiting" | "started" | "finished";
+  /** "quiz" is the original everyone-answers mode; "gameshow" is team play. */
+  mode: "quiz" | "gameshow";
   difficulty: string;
   questionCount: number;
   timePerQuestion: number;
@@ -100,6 +116,10 @@ interface Room {
   hostName: string;
   createdAt: number;
   players: Map<string, Player>;
+  /** Present only in game-show mode. */
+  gameshow?: GameShowState;
+  /** Question ids already used this game, so spins don't repeat them. */
+  usedQuestionIds?: string[];
 }
 
 const rooms = new Map<string, Room>();
@@ -129,15 +149,46 @@ function publicRoom(room: Room) {
   return {
     code: room.code,
     status: room.status,
+    mode: room.mode,
     difficulty: room.difficulty,
     questionCount: room.questionCount,
     timePerQuestion: room.timePerQuestion,
     endTime: room.endTime,
     hostName: room.hostName,
     players: [...room.players.values()]
-      .map((p) => ({ id: p.id, name: p.name, score: p.score }))
+      .map((p) => ({ id: p.id, name: p.name, score: p.score, teamId: p.teamId }))
       .sort((a, b) => b.score - a.score),
+    // Game-show state, including the question currently in play. The correct
+    // answer is never sent — answers are graded server-side.
+    gameshow: room.gameshow
+      ? { ...room.gameshow, question: publicQuestion(room.gameshow.questionId) }
+      : undefined,
   };
+}
+
+/** The in-play question, stripped of its answer key. */
+function publicQuestion(questionId: string | null) {
+  if (!questionId) return null;
+  const q = questionBank.find((x) => x.id === questionId);
+  if (!q) return null;
+  return { id: q.id, question: q.question, options: q.options, concept: q.concept, difficulty: q.difficulty };
+}
+
+/** Pick a question for a spin, avoiding ones already used this game. */
+function pickGameShowQuestion(room: Room): Question | null {
+  const used = new Set(room.usedQuestionIds ?? []);
+  let pool = questionBank.filter((q) => !used.has(q.id));
+  if (room.difficulty !== "all") {
+    const byDifficulty = pool.filter((q) => q.difficulty === room.difficulty);
+    if (byDifficulty.length > 0) pool = byDifficulty;
+  }
+  // Every question used — recycle rather than stall the game.
+  if (pool.length === 0) {
+    room.usedQuestionIds = [];
+    pool = questionBank;
+  }
+  if (pool.length === 0) return null;
+  return pool[crypto.randomInt(pool.length)];
 }
 
 const ai = new GoogleGenAI({
@@ -189,11 +240,13 @@ async function startServer() {
   app.post("/api/session", (req, res) => {
     if (!requireInstructor(req, res)) return;
     sweepRooms();
-    const { difficulty, questionCount, timePerQuestion, hostName } = req.body ?? {};
+    const { difficulty, questionCount, timePerQuestion, hostName, mode, teamCount } = req.body ?? {};
     const code = newCode();
+    const gameshowMode = mode === "gameshow";
     rooms.set(code, {
       code,
       status: "waiting",
+      mode: gameshowMode ? "gameshow" : "quiz",
       difficulty: ["all", "easy", "medium", "hard"].includes(difficulty) ? difficulty : "all",
       questionCount: Number(questionCount) || 10,
       timePerQuestion: normalizeTimePerQuestion(timePerQuestion),
@@ -201,6 +254,8 @@ async function startServer() {
       hostName: typeof hostName === "string" && hostName ? hostName.slice(0, 50) : "Instructor",
       createdAt: Date.now(),
       players: new Map(),
+      gameshow: gameshowMode ? createGameShowState(Number(teamCount) || 2) : undefined,
+      usedQuestionIds: [],
     });
     res.json({ code });
   });
@@ -241,8 +296,84 @@ async function startServer() {
     }
     const id = crypto.randomUUID();
     const token = crypto.randomBytes(16).toString("hex");
-    room.players.set(id, { id, token, name: name.trim().slice(0, 50), score: 0, history: [] });
-    res.json({ playerId: id, playerToken: token, room: publicRoom(room) });
+
+    // In game-show mode put the player on the smallest team so sides stay even.
+    let teamId: string | undefined;
+    if (room.mode === "gameshow" && room.gameshow) {
+      const sizes: Record<string, number> = {};
+      for (const p of room.players.values()) {
+        if (p.teamId) sizes[p.teamId] = (sizes[p.teamId] ?? 0) + 1;
+      }
+      teamId = assignTeam(room.gameshow.teams, sizes);
+    }
+
+    room.players.set(id, { id, token, name: name.trim().slice(0, 50), score: 0, history: [], teamId });
+    res.json({ playerId: id, playerToken: token, teamId, room: publicRoom(room) });
+  });
+
+  // ---- Game show --------------------------------------------------------
+  /** Host spins the wheel; hazards resolve at once, points put a question up. */
+  app.post("/api/session/:code/spin", (req, res) => {
+    if (!requireInstructor(req, res)) return;
+    const room = rooms.get(req.params.code.toUpperCase());
+    if (!room) return res.status(404).json({ error: "Session not found." });
+    if (room.mode !== "gameshow" || !room.gameshow) {
+      return res.status(409).json({ error: "This session is not in game-show mode." });
+    }
+    if (room.gameshow.phase !== "idle") {
+      return res.status(409).json({ error: "Finish the current turn before spinning again." });
+    }
+
+    const segment = spinWheel();
+    const question = segment.kind === "points" ? pickGameShowQuestion(room) : null;
+    if (question) room.usedQuestionIds = [...(room.usedQuestionIds ?? []), question.id];
+    room.gameshow = applySpin(room.gameshow, segment, question?.id ?? null);
+    res.json(publicRoom(room));
+  });
+
+  /** A player on the active team answers the question in play. */
+  app.post("/api/session/:code/answer", (req, res) => {
+    const room = rooms.get(req.params.code.toUpperCase());
+    if (!room) return res.status(404).json({ error: "Session not found." });
+    if (room.mode !== "gameshow" || !room.gameshow) {
+      return res.status(409).json({ error: "This session is not in game-show mode." });
+    }
+    const { playerId, playerToken, answer } = req.body ?? {};
+    const player = room.players.get(playerId);
+    if (!player || player.token !== playerToken) {
+      return res.status(403).json({ error: "Invalid player." });
+    }
+    if (room.gameshow.phase !== "question") {
+      return res.status(409).json({ error: "There is no question to answer right now." });
+    }
+    const team = activeTeam(room.gameshow);
+    if (!team || player.teamId !== team.id) {
+      return res.status(403).json({ error: "It is not your team's turn." });
+    }
+
+    const question = questionBank.find((q) => q.id === room.gameshow!.questionId);
+    if (!question) return res.status(409).json({ error: "Question is no longer available." });
+
+    // Graded server-side so the answer key never reaches the client.
+    const correct =
+      typeof answer === "string" &&
+      answer.trim().toLowerCase() === question.correctAnswer.trim().toLowerCase();
+
+    player.history.push({ question: { id: question.id, question: question.question, concept: question.concept, difficulty: question.difficulty }, correct, timeTaken: 0 });
+    room.gameshow = applyAnswer(room.gameshow, correct);
+    res.json({ correct, correctAnswer: question.correctAnswer, room: publicRoom(room) });
+  });
+
+  /** Host hands play to the next team. */
+  app.post("/api/session/:code/next-turn", (req, res) => {
+    if (!requireInstructor(req, res)) return;
+    const room = rooms.get(req.params.code.toUpperCase());
+    if (!room) return res.status(404).json({ error: "Session not found." });
+    if (room.mode !== "gameshow" || !room.gameshow) {
+      return res.status(409).json({ error: "This session is not in game-show mode." });
+    }
+    room.gameshow = nextTurn(room.gameshow);
+    res.json(publicRoom(room));
   });
 
   app.post("/api/session/:code/settings", (req, res) => {

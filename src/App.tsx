@@ -34,7 +34,11 @@ import confetti from "canvas-confetti";
 import { CYBER_QUESTIONS, type Question, type ConceptId } from "./constants";
 import { cn } from "./lib/utils";
 import { audio } from "./lib/audio";
-import { selectConceptQuestions } from "./lib/questions";
+import {
+  selectSoloQuestions,
+  difficultyAvailability,
+  type SoloDifficulty,
+} from "./lib/questions";
 import { studentsToCsv, csvFilename } from "./lib/csv";
 import {
   hasPassedConcept,
@@ -44,6 +48,8 @@ import {
 } from "./lib/campaign";
 import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
+import { GameShowHost } from "./components/GameShowHost";
+import { GameShowPlayer } from "./components/GameShowPlayer";
 import {
   api,
   getInstructorToken,
@@ -60,7 +66,17 @@ interface SessionUser {
   isAnonymous: boolean;
 }
 
-type GameState = "login" | "lobby" | "waiting" | "hosting" | "playing" | "results" | "admin_dashboard" | "campaign";
+type GameState =
+  | "login"
+  | "lobby"
+  | "waiting"
+  | "hosting"
+  | "playing"
+  /** Student view during a game-show session (team play, no per-question timer). */
+  | "gameshow_play"
+  | "results"
+  | "admin_dashboard"
+  | "campaign";
 
 // Per-session student identity, returned by the server on join.
 const PLAYER_KEY = "rfc_player";
@@ -115,6 +131,14 @@ export default function App() {
   const [joinError, setJoinError] = useState("");
   const [hostError, setHostError] = useState("");
   const [isHosting, setIsHosting] = useState(false);
+  /** Number of teams for a game-show session. */
+  const [gameShowTeamCount, setGameShowTeamCount] = useState(2);
+  /** True while a spin / next-turn request is in flight. */
+  const [gameShowBusy, setGameShowBusy] = useState(false);
+  /** Student side: outcome of this player's last game-show answer. */
+  const [gameShowResult, setGameShowResult] = useState<{ correct: boolean; correctAnswer: string } | null>(null);
+  /** Question id this student's team has already answered. */
+  const [answeredQuestionId, setAnsweredQuestionId] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [sessionTimeLeft, setSessionTimeLeft] = useState<number | null>(null);
@@ -134,6 +158,10 @@ export default function App() {
   const [activeCampaignConcept, setActiveCampaignConcept] = useState<string | null>(null);
   // When set, the next round replays only these (previously missed) questions.
   const [retryQuestions, setRetryQuestions] = useState<Question[] | null>(null);
+  // Solo practice settings, independent of the hosted-session difficulty.
+  const [soloDifficulty, setSoloDifficulty] = useState<SoloDifficulty>("all");
+  // True while playing an all-topics round rather than a single skill.
+  const [soloAllTopics, setSoloAllTopics] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("rfc_unlocked_concepts", JSON.stringify(unlockedConcepts));
@@ -159,9 +187,18 @@ export default function App() {
     // A retry round replays only the questions the learner missed.
     if (retryQuestions && retryQuestions.length > 0) return retryQuestions;
 
-    if ((gameState === "campaign" || activeCampaignConcept) && bankQuestions.length > 0) {
-      const conceptQuestions = selectConceptQuestions(bankQuestions, activeCampaignConcept);
-      if (conceptQuestions.length > 0) return conceptQuestions;
+    // Solo practice: a single skill, or an all-topics round. Difficulty is
+    // applied on top of either.
+    if (
+      (gameState === "campaign" || activeCampaignConcept || soloAllTopics) &&
+      bankQuestions.length > 0
+    ) {
+      const soloQuestions = selectSoloQuestions(bankQuestions, {
+        conceptId: soloAllTopics ? null : activeCampaignConcept,
+        difficulty: soloDifficulty,
+        limit: soloAllTopics ? 10 : undefined,
+      });
+      if (soloQuestions.length > 0) return soloQuestions;
     }
 
     const questions =
@@ -206,6 +243,8 @@ export default function App() {
     gameState,
     activeCampaignConcept,
     retryQuestions,
+    soloAllTopics,
+    soloDifficulty,
   ]);
 
   const currentQuestion = filteredQuestions[currentQuestionIndex];
@@ -312,7 +351,13 @@ export default function App() {
         } else {
           clearInterval(interval);
           setCountdown(null);
-          startGameLocally();
+          // Game-show sessions are host-paced with no per-question timer, so
+          // students go to the team view rather than the solo quiz loop.
+          if (roomData?.mode === "gameshow") {
+            setGameState("gameshow_play");
+          } else {
+            startGameLocally();
+          }
         }
       }, 1000);
       return () => clearInterval(interval);
@@ -402,7 +447,7 @@ export default function App() {
     }
   };
 
-  const createRoom = async () => {
+  const createRoom = async (mode: "quiz" | "gameshow" = "quiz") => {
     if (!isAdmin || isHosting) return;
     setHostError("");
     setIsHosting(true);
@@ -412,6 +457,8 @@ export default function App() {
         questionCount: numberOfQuestions,
         timePerQuestion,
         hostName: user?.displayName || "Instructor",
+        mode,
+        teamCount: gameShowTeamCount,
       });
       // The host monitors the session; they do not join as a player.
       setRoomId(code);
@@ -457,6 +504,58 @@ export default function App() {
       await api.startSession(roomId, sessionDurationMinutes);
     } catch (error) {
       console.error("Failed to start session:", error);
+    }
+  };
+
+  // Clear the student's answer feedback once the host moves to a new question
+  // or ends the turn, so stale feedback never sits under a fresh question.
+  useEffect(() => {
+    const qid = roomData?.gameshow?.questionId ?? null;
+    if (qid !== answeredQuestionId) {
+      setGameShowResult(null);
+      if (qid === null) setAnsweredQuestionId(null);
+    }
+  }, [roomData?.gameshow?.questionId, roomData?.gameshow?.phase]);
+
+  // ---- Game show host controls -----------------------------------------
+  const handleSpin = async () => {
+    if (!roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      setRoomData(await api.spin(roomId));
+    } catch (error) {
+      console.error("Spin failed:", error);
+    } finally {
+      setGameShowBusy(false);
+    }
+  };
+
+  /** Student submits an answer for their team. */
+  const handleGameShowAnswer = async (option: string) => {
+    const info = playerInfoRef.current;
+    if (!info || !roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      const res = await api.answerGameShow(roomId, info.id, info.token, option);
+      setGameShowResult({ correct: res.correct, correctAnswer: res.correctAnswer });
+      setAnsweredQuestionId(res.room.gameshow?.questionId ?? null);
+      setRoomData(res.room);
+    } catch (error) {
+      console.error("Answer failed:", error);
+    } finally {
+      setGameShowBusy(false);
+    }
+  };
+
+  const handleNextTurn = async () => {
+    if (!roomId || gameShowBusy) return;
+    setGameShowBusy(true);
+    try {
+      setRoomData(await api.nextTurn(roomId));
+    } catch (error) {
+      console.error("Next turn failed:", error);
+    } finally {
+      setGameShowBusy(false);
     }
   };
 
@@ -593,7 +692,26 @@ export default function App() {
 
   const handleStartCampaignConcept = (conceptId: string) => {
     setActiveCampaignConcept(conceptId);
+    setSoloAllTopics(false);
     setRetryQuestions(null); // a fresh attempt plays the full concept
+    setGameState("playing");
+    setConfirmExit(false);
+    setCurrentQuestionIndex(0);
+    setScore(0);
+    setGameHistory([]);
+    resetQuestionState();
+    audio.playStart();
+  };
+
+  /**
+   * Start a mixed round drawn from every skill. It does not set an active
+   * concept, so it neither unlocks nor completes anything on the path — it is
+   * pure practice.
+   */
+  const handleStartAllTopics = () => {
+    setActiveCampaignConcept(null);
+    setSoloAllTopics(true);
+    setRetryQuestions(null);
     setGameState("playing");
     setConfirmExit(false);
     setCurrentQuestionIndex(0);
@@ -622,6 +740,7 @@ export default function App() {
     const wasCampaign = !!activeCampaignConcept;
     setConfirmExit(false);
     setActiveCampaignConcept(null);
+    setSoloAllTopics(false);
     setRetryQuestions(null);
     setCurrentQuestionIndex(0);
     setScore(0);
@@ -800,14 +919,17 @@ export default function App() {
     <div
       className={cn(
         "min-h-[100dvh] w-full font-sans relative flex flex-col",
-        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "hosting")
+        // The game-show projector reads better on the dark stage treatment,
+        // so it opts out of the light chrome the other host screens use.
+        (gameState === "login" || gameState === "lobby" || gameState === "admin_dashboard" || gameState === "waiting" || gameState === "campaign" ||
+          (gameState === "hosting" && !(roomData?.mode === "gameshow" && roomData?.status === "started")))
           ? "bg-slate-50 text-slate-900 overflow-y-auto"
           : "bg-[#050505] text-slate-100 selection:bg-blue-500/30 overflow-hidden",
       )}
     >
       {/* Animated Background — purely decorative, so it is dropped entirely
           when the user has asked for reduced motion. */}
-      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && (
+      {!prefersReducedMotion && gameState !== "login" && gameState !== "lobby" && gameState !== "admin_dashboard" && gameState !== "waiting" && gameState !== "hosting" && gameState !== "campaign" && (
         <div className="fixed inset-0 z-0 pointer-events-none">
           {/* Animated Grid */}
           <div className="absolute inset-0 [mask-image:linear-gradient(to_bottom,white,transparent)]">
@@ -884,9 +1006,23 @@ export default function App() {
                  unlockedConcepts={unlockedConcepts}
                  completedConcepts={completedConcepts}
                  onSelectConcept={handleStartCampaignConcept}
+                 onSelectAllTopics={handleStartAllTopics}
+                 difficulty={soloDifficulty}
+                 onDifficultyChange={setSoloDifficulty}
+                 availability={difficultyAvailability(bankQuestions, null)}
+                 conceptCounts={Object.fromEntries(
+                   CONCEPTS.map((c) => [
+                     c.id,
+                     selectSoloQuestions(bankQuestions, {
+                       conceptId: c.id,
+                       difficulty: soloDifficulty,
+                     }).length,
+                   ]),
+                 )}
                  onBack={() => {
                    setGameState("login");
                    setActiveCampaignConcept(null);
+                   setSoloAllTopics(false);
                  }}
               />
             </motion.div>
@@ -955,6 +1091,53 @@ export default function App() {
                         ))}
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                {/* How it works */}
+                <div className="w-full max-w-4xl mx-auto space-y-6 px-4 md:px-0">
+                  <h2 className="text-center text-2xl font-extrabold tracking-tight text-slate-900">
+                    How it works
+                  </h2>
+                  <div className="grid sm:grid-cols-3 gap-4">
+                    {[
+                      {
+                        step: "1",
+                        icon: <Play className="w-5 h-5" />,
+                        title: "Jump in",
+                        text: "Join your class with a code, or start a solo mission — it takes seconds.",
+                      },
+                      {
+                        step: "2",
+                        icon: <Timer className="w-5 h-5" />,
+                        title: "Answer & race the clock",
+                        text: "Quick multiple-choice challenges. Faster correct answers earn more points.",
+                      },
+                      {
+                        step: "3",
+                        icon: <Brain className="w-5 h-5" />,
+                        title: "Learn from every answer",
+                        text: "Right or wrong, each question ends with a plain-language explanation.",
+                      },
+                    ].map((s) => (
+                      <div
+                        key={s.step}
+                        className="p-6 bg-white border border-slate-200 rounded-2xl space-y-3 shadow-sm"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                            {s.icon}
+                          </div>
+                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                            Step {s.step}
+                          </span>
+                        </div>
+                        <h3 className="font-bold text-slate-900">{s.title}</h3>
+                        <p className="text-sm text-slate-500 leading-relaxed">
+                          {s.text}
+                        </p>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -1079,53 +1262,6 @@ export default function App() {
                     >
                       Start Training <ChevronRight className="w-5 h-5" />
                     </motion.button>
-                  </div>
-                </div>
-
-                {/* How it works */}
-                <div className="w-full max-w-4xl mx-auto space-y-6 px-4 md:px-0">
-                  <h2 className="text-center text-2xl font-extrabold tracking-tight text-slate-900">
-                    How it works
-                  </h2>
-                  <div className="grid sm:grid-cols-3 gap-4">
-                    {[
-                      {
-                        step: "1",
-                        icon: <Play className="w-5 h-5" />,
-                        title: "Jump in",
-                        text: "Join your class with a code, or start a solo mission — it takes seconds.",
-                      },
-                      {
-                        step: "2",
-                        icon: <Timer className="w-5 h-5" />,
-                        title: "Answer & race the clock",
-                        text: "Quick multiple-choice challenges. Faster correct answers earn more points.",
-                      },
-                      {
-                        step: "3",
-                        icon: <Brain className="w-5 h-5" />,
-                        title: "Learn from every answer",
-                        text: "Right or wrong, each question ends with a plain-language explanation.",
-                      },
-                    ].map((s) => (
-                      <div
-                        key={s.step}
-                        className="p-6 bg-white border border-slate-200 rounded-2xl space-y-3 shadow-sm"
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                            {s.icon}
-                          </div>
-                          <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                            Step {s.step}
-                          </span>
-                        </div>
-                        <h3 className="font-bold text-slate-900">{s.title}</h3>
-                        <p className="text-sm text-slate-500 leading-relaxed">
-                          {s.text}
-                        </p>
-                      </div>
-                    ))}
                   </div>
                 </div>
 
@@ -1324,7 +1460,7 @@ export default function App() {
                 <motion.button
                   whileHover={{ scale: 1.01, translateY: -2 }}
                   whileTap={{ scale: 0.99 }}
-                  onClick={createRoom}
+                  onClick={() => createRoom("quiz")}
                   className="group relative w-full flex flex-col md:flex-row items-center gap-6 p-8 md:p-10 bg-white border border-slate-200 rounded-3xl text-center md:text-left hover:shadow-xl hover:border-blue-200 transition-all shadow-md shadow-slate-200/50"
                 >
                   <div className="p-5 bg-blue-50 text-blue-600 rounded-2xl group-hover:scale-110 group-hover:bg-blue-100 transition-all duration-300 shrink-0">
@@ -1352,6 +1488,49 @@ export default function App() {
                     Students join from the home page using your session code.
                   </p>
                 )}
+
+                {/* Game-show mode: team play around a projected wheel. */}
+                <div className="mt-6 p-6 bg-slate-900 text-white rounded-3xl space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="p-4 bg-amber-400/15 text-amber-300 rounded-2xl shrink-0">
+                      <Trophy className="w-7 h-7" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-xl font-bold">Host a Game Show</h3>
+                      <p className="text-sm text-slate-400">
+                        Teams take turns spinning a wheel on the projector. Put this
+                        screen on the board and let students answer from their devices.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+                      Teams
+                    </span>
+                    {[2, 3, 4].map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => setGameShowTeamCount(n)}
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-sm font-bold border transition-all",
+                          gameShowTeamCount === n
+                            ? "bg-amber-400 text-black border-amber-300"
+                            : "bg-white/5 text-slate-300 border-white/10 hover:bg-white/10",
+                        )}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => createRoom("gameshow")}
+                      disabled={isHosting}
+                      className="ml-auto px-6 py-3 rounded-xl bg-amber-400 text-black font-black hover:bg-amber-300 disabled:opacity-50 transition-colors"
+                    >
+                      {isHosting ? "Starting…" : "Start Game Show"}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Concept Info Footer Grid */}
@@ -1502,6 +1681,22 @@ export default function App() {
                 const ended =
                   roomData?.status === "finished" || sessionTimeLeft === 0;
                 const live = started && !ended;
+
+                // Game-show sessions get the projector view once started.
+                if (roomData?.mode === "gameshow" && roomData.gameshow && started && !ended) {
+                  return (
+                    <GameShowHost
+                      code={roomId}
+                      gameshow={roomData.gameshow}
+                      playerCount={players.length}
+                      onSpin={handleSpin}
+                      onNextTurn={handleNextTurn}
+                      onEnd={endRoomGame}
+                      busy={gameShowBusy}
+                      reducedMotion={!!prefersReducedMotion}
+                    />
+                  );
+                }
 
                 return (
                   <>
@@ -1757,6 +1952,28 @@ export default function App() {
                   </>
                 );
               })()}
+            </motion.div>
+          )}
+
+          {gameState === "gameshow_play" && roomData?.gameshow && (
+            <motion.div
+              key="gameshow_play"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="flex-1 flex flex-col"
+            >
+              <GameShowPlayer
+                gameshow={roomData.gameshow}
+                myTeamId={roomData.players?.find((p: any) => p.id === user?.uid)?.teamId}
+                playerName={user?.displayName ?? undefined}
+                lastResult={gameShowResult}
+                submitting={gameShowBusy}
+                answered={
+                  !!roomData.gameshow.questionId &&
+                  answeredQuestionId === roomData.gameshow.questionId
+                }
+                onAnswer={handleGameShowAnswer}
+              />
             </motion.div>
           )}
 

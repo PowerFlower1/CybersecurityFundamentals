@@ -4,6 +4,7 @@
 // the editable question bank, the login rate-limit counters, and a registry of
 // active room codes (so the dashboard and metrics can enumerate sessions).
 import { CYBER_QUESTIONS } from "../constants";
+import { reconcileBank } from "../lib/questions";
 
 interface RateEntry {
   count: number;
@@ -22,8 +23,15 @@ export class GlobalDO {
 
     switch (action) {
       case "questions:get": {
-        const q = (await storage.get<any[]>("questions")) ?? CYBER_QUESTIONS;
-        return json({ questions: q });
+        const stored = await storage.get<any[]>("questions");
+        if (!stored) return json({ questions: CYBER_QUESTIONS });
+
+        // A bank saved before a schema field existed would otherwise be served
+        // forever, silently disabling anything that depends on that field.
+        // Patch in the missing metadata and persist the repair once.
+        const { questions, repaired } = reconcileBank(stored, CYBER_QUESTIONS);
+        if (repaired) await storage.put("questions", questions);
+        return json({ questions });
       }
 
       case "questions:set": {

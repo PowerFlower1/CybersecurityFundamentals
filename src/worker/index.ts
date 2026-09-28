@@ -77,7 +77,16 @@ api.post("/session", async (c) => {
   }
   const body = await c.req.json().catch(() => ({}) as any);
   const code = newCode();
-  await callDO(roomStub(c.env, code), "create", { code, ...body });
+
+  // A game-show room grades answers itself, so hand it a snapshot of the
+  // question bank (which otherwise lives in GlobalDO) at creation time.
+  let questions: unknown[] | undefined;
+  if (body.mode === "gameshow") {
+    const res = await callDO(globalStub(c.env), "questions:get");
+    if (res.ok) questions = ((await res.json()) as { questions: unknown[] }).questions;
+  }
+
+  await callDO(roomStub(c.env, code), "create", { code, ...body, questions });
   await callDO(globalStub(c.env), "rooms:add", { code });
   return c.json({ code });
 });
@@ -131,6 +140,28 @@ api.post("/session/:code/end", async (c) => {
     return c.json({ error: "Instructor sign-in required." }, 401);
   }
   return proxy(await callDO(roomStub(c.env, c.req.param("code").toUpperCase()), "end", {}));
+});
+
+// ---- Game show ---------------------------------------------------------
+api.post("/session/:code/spin", async (c) => {
+  if (!(await isInstructor(c.env, c.req.header("Authorization")))) {
+    return c.json({ error: "Instructor sign-in required." }, 401);
+  }
+  return proxy(await callDO(roomStub(c.env, c.req.param("code").toUpperCase()), "spin", {}));
+});
+
+api.post("/session/:code/next-turn", async (c) => {
+  if (!(await isInstructor(c.env, c.req.header("Authorization")))) {
+    return c.json({ error: "Instructor sign-in required." }, 401);
+  }
+  return proxy(await callDO(roomStub(c.env, c.req.param("code").toUpperCase()), "next-turn", {}));
+});
+
+// Players answer directly — the Durable Object checks the player token and
+// that it is actually their team's turn.
+api.post("/session/:code/answer", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as any);
+  return proxy(await callDO(roomStub(c.env, c.req.param("code").toUpperCase()), "answer", body));
 });
 
 api.delete("/session/:code", async (c) => {
