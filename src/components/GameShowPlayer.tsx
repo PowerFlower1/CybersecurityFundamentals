@@ -1,6 +1,7 @@
 import { motion } from "motion/react";
 import { CheckCircle2, AlertCircle, Users } from "lucide-react";
 import { cn } from "../lib/utils";
+import { winningTeams } from "../lib/gameshow";
 import type { GameShowView } from "../lib/api";
 
 // The student's phone/laptop view during a game show. The projector carries the
@@ -44,6 +45,9 @@ export function GameShowPlayer({
   const tc = teamClass(myTeam?.color);
   const question = gameshow.question;
   const canAnswer = myTurn && gameshow.phase === "question" && !!question && !answered;
+  const over = gameshow.phase === "final";
+  const winners = over ? winningTeams(gameshow as never) : [];
+  const iWon = winners.some((w) => w.id === myTeamId);
 
   return (
     <div className="flex-1 flex flex-col gap-5 max-w-2xl mx-auto w-full py-4">
@@ -69,11 +73,36 @@ export function GameShowPlayer({
         role="status"
         aria-live="polite"
       >
-        {myTurn ? "Your team's turn" : `${activeTeam?.name ?? "Another team"}'s turn — watch the board`}
+        {over
+          ? "Game over — final scores are on the board"
+          : myTurn
+            ? "Your team's turn"
+            : `${activeTeam?.name ?? "Another team"}'s turn — watch the board`}
       </div>
 
       {/* Main stage */}
-      {gameshow.phase === "question" && question ? (
+      {over ? (
+        <div
+          className={cn(
+            "rounded-2xl border p-6 text-center space-y-2",
+            iWon ? "bg-amber-400/10 border-amber-400/40" : "bg-white/5 border-white/10",
+          )}
+        >
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Final</p>
+          <p className="text-2xl font-black text-white">
+            {winners.length === 0
+              ? "No points scored"
+              : winners.length > 1
+                ? `Tie — ${winners.map((w) => w.name).join(" & ")}`
+                : `${winners[0].name} wins`}
+          </p>
+          {winners.length > 0 && (
+            <p className={cn("text-sm font-bold", iWon ? "text-amber-300" : "text-slate-400")}>
+              {iWon ? "That's your team — nice work." : `${myTeam?.name ?? "Your team"} finished on ${myTeam?.score ?? 0}.`}
+            </p>
+          )}
+        </div>
+      ) : gameshow.phase === "question" && question ? (
         <div className="space-y-4">
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-1 rounded-lg bg-amber-400 text-black text-sm font-black">

@@ -24,13 +24,14 @@ export interface PublicQuestion {
 export interface GameShowView {
   teams: { id: string; name: string; color: string; score: number }[];
   turnIndex: number;
-  phase: "idle" | "question" | "resolved";
+  phase: "idle" | "question" | "resolved" | "final";
   spin: { id: string; kind: string; value: number; label: string } | null;
   questionId: string | null;
   question: PublicQuestion | null;
   doubleNext: boolean;
   lastOutcome: string | null;
   turnsTaken: number;
+  turnLimit: number;
 }
 
 export interface RoomState {

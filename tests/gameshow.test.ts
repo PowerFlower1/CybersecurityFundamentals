@@ -5,6 +5,10 @@ import {
   MIN_TEAMS,
   MAX_TEAMS,
   BANKRUPT_PENALTY,
+  DEFAULT_ROUNDS,
+  isGameOver,
+  roundInfo,
+  winningTeams,
   createTeams,
   createGameShowState,
   assignTeam,
@@ -284,5 +288,120 @@ describe("a full round", () => {
 
     expect(rankedTeams(s)[0].id).toBe("red");
     expect(s.turnsTaken).toBe(3);
+  });
+});
+
+describe("end of game", () => {
+  /** Play `n` complete turns, scoring `points` for the team on each one. */
+  const playTurns = (s0: any, n: number, points = 0) => {
+    let s = s0;
+    for (let i = 0; i < n; i++) {
+      if (points > 0) {
+        s = applySpin(s, WHEEL.find((w) => w.value === points)!, "q1");
+        s = applyAnswer(s, true);
+      }
+      s = nextTurn(s);
+    }
+    return s;
+  };
+
+  it("runs a whole number of rounds so every team gets equal turns", () => {
+    for (const teams of [2, 3, 4]) {
+      const s = createGameShowState(teams);
+      expect(s.turnLimit).toBe(teams * DEFAULT_ROUNDS);
+      expect(s.turnLimit % teams).toBe(0);
+    }
+  });
+
+  it("accepts a custom round count", () => {
+    expect(createGameShowState(4, 2).turnLimit).toBe(8);
+    expect(createGameShowState(2, 5).turnLimit).toBe(10);
+  });
+
+  it("falls back to the default for a nonsense round count", () => {
+    expect(createGameShowState(2, 0).turnLimit).toBe(2 * DEFAULT_ROUNDS);
+    expect(createGameShowState(2, -3).turnLimit).toBe(2 * 1);
+  });
+
+  it("is not over before the last turn", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS - 1);
+    expect(isGameOver(s)).toBe(false);
+    expect(s.phase).toBe("idle");
+  });
+
+  it("ends exactly on the final turn", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS);
+    expect(isGameOver(s)).toBe(true);
+    expect(s.phase).toBe("final");
+  });
+
+  it("gives every team the same number of turns", () => {
+    // Count how often each team is the active one across a whole game.
+    let s = createGameShowState(3);
+    const turns: Record<string, number> = {};
+    while (!isGameOver(s)) {
+      turns[s.teams[s.turnIndex].id] = (turns[s.teams[s.turnIndex].id] ?? 0) + 1;
+      s = nextTurn(s);
+    }
+    expect(new Set(Object.values(turns)).size).toBe(1);
+    expect(Object.values(turns)[0]).toBe(DEFAULT_ROUNDS);
+  });
+
+  it("refuses to spin once the game is over", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS);
+    const after = applySpin(s, seg("p800"), "q9");
+    expect(after).toEqual(s);
+  });
+
+  it("ignores further turn advances once over", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS);
+    expect(nextTurn(s)).toEqual(s);
+  });
+
+  it("does not advance the turn pointer onto a team that never played", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS);
+    // The pointer rests on whoever took the last turn, not the next team up.
+    expect(s.turnIndex).toBe(1);
+  });
+
+  it("reports the round as it progresses", () => {
+    let s = createGameShowState(2);
+    expect(roundInfo(s)).toEqual({ round: 1, rounds: DEFAULT_ROUNDS });
+    s = playTurns(s, 2);
+    expect(roundInfo(s)).toEqual({ round: 2, rounds: DEFAULT_ROUNDS });
+    s = playTurns(s, 2);
+    expect(roundInfo(s)).toEqual({ round: 3, rounds: DEFAULT_ROUNDS });
+  });
+
+  it("never reports a round past the last one", () => {
+    const s = playTurns(createGameShowState(2), 2 * DEFAULT_ROUNDS);
+    expect(roundInfo(s).round).toBe(DEFAULT_ROUNDS);
+  });
+});
+
+describe("winningTeams", () => {
+  it("names the single top scorer", () => {
+    const s = createGameShowState(3);
+    const scored = { ...s, teams: s.teams.map((t, i) => ({ ...t, score: [100, 900, 400][i] })) };
+    expect(winningTeams(scored).map((t) => t.id)).toEqual(["red"]);
+  });
+
+  it("returns every team in a tie rather than picking one", () => {
+    const s = createGameShowState(3);
+    const tied = { ...s, teams: s.teams.map((t, i) => ({ ...t, score: [700, 700, 200][i] })) };
+    const w = winningTeams(tied);
+    expect(w).toHaveLength(2);
+    expect(w.map((t) => t.id).sort()).toEqual(["blue", "red"]);
+  });
+
+  // A game where nobody scored has no winner — better than crowning a team
+  // on zero in front of the class.
+  it("has no winner when nobody scored", () => {
+    expect(winningTeams(createGameShowState(4))).toEqual([]);
+  });
+
+  it("has no winner when every score is zero after setbacks", () => {
+    const s = createGameShowState(2);
+    expect(winningTeams({ ...s, teams: s.teams.map((t) => ({ ...t, score: 0 })) })).toEqual([]);
   });
 });
