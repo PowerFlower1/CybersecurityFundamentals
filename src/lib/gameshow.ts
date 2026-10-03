@@ -28,11 +28,19 @@ export const WHEEL: WheelSegment[] = [
   { id: "double1", kind: "double", value: 0, label: "Double" },
   { id: "p300", kind: "points", value: 300, label: "300" },
   { id: "p1000", kind: "points", value: 1000, label: "1000" },
-  { id: "bankrupt1", kind: "bankrupt", value: 0, label: "Bankrupt" },
+  { id: "bankrupt1", kind: "bankrupt", value: 0, label: "Setback" },
   { id: "p500", kind: "points", value: 500, label: "500" },
   { id: "p700", kind: "points", value: 700, label: "700" },
   { id: "p900", kind: "points", value: 900, label: "900" },
 ];
+
+/**
+ * What a Setback costs. The original game show zeroes the team's score, but in
+ * a classroom that wipes out a period's work on one unlucky spin and the team
+ * stops trying. A fixed deduction keeps the hazard real without ending anyone's
+ * game, and is floored at zero so a team can never go negative.
+ */
+export const BANKRUPT_PENALTY = 400;
 
 export interface Team {
   id: string;
@@ -137,16 +145,24 @@ export function applySpin(state: GameShowState, segment: WheelSegment, questionI
         lastOutcome: `${team.name} lost a turn.`,
       };
 
-    case "bankrupt":
+    case "bankrupt": {
+      // Deduct rather than wipe, and never past zero, so the number the
+      // projector announces is the number the team actually lost.
+      const lost = Math.min(team.score, BANKRUPT_PENALTY);
       return {
         ...state,
         spin: segment,
         phase: "resolved",
         questionId: null,
         doubleNext: false,
-        teams: state.teams.map((t) => (t.id === team.id ? { ...t, score: 0 } : t)),
-        lastOutcome: `Bankrupt! ${team.name} lost their points.`,
+        teams: state.teams.map((t) =>
+          t.id === team.id ? { ...t, score: t.score - lost } : t,
+        ),
+        lastOutcome: lost
+          ? `Setback! ${team.name} lost ${lost} points.`
+          : `Setback! ${team.name} had no points to lose.`,
       };
+    }
 
     case "double":
       return {

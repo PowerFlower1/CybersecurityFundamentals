@@ -4,6 +4,7 @@ import {
   TEAM_PRESETS,
   MIN_TEAMS,
   MAX_TEAMS,
+  BANKRUPT_PENALTY,
   createTeams,
   createGameShowState,
   assignTeam,
@@ -124,20 +125,38 @@ describe("applySpin", () => {
     expect(s.lastOutcome).toMatch(/lost a turn/i);
   });
 
-  it("zeroes the active team's score on Bankrupt", () => {
+  // Softened deliberately: a wipe ends a team's engagement for the rest of the
+  // period on one unlucky spin, which is the opposite of what the mode is for.
+  it("deducts a fixed penalty on Setback rather than wiping the score", () => {
     let s = createGameShowState(2);
     s = { ...s, teams: s.teams.map((t, i) => (i === 0 ? { ...t, score: 2500 } : t)) };
     s = applySpin(s, seg("bankrupt1"), "q1");
-    expect(s.teams[0].score).toBe(0);
+    expect(s.teams[0].score).toBe(2500 - BANKRUPT_PENALTY);
     expect(s.phase).toBe("resolved");
-    expect(s.lastOutcome).toMatch(/bankrupt/i);
+    expect(s.lastOutcome).toMatch(/setback/i);
   });
 
-  it("only bankrupts the active team", () => {
+  it("floors the score at zero instead of going negative", () => {
+    let s = createGameShowState(2);
+    s = { ...s, teams: s.teams.map((t, i) => (i === 0 ? { ...t, score: 100 } : t)) };
+    s = applySpin(s, seg("bankrupt1"), null);
+    expect(s.teams[0].score).toBe(0);
+    // The announced figure must be what was actually lost, not the full penalty.
+    expect(s.lastOutcome).toMatch(/lost 100 points/i);
+  });
+
+  it("handles a Setback on a team with nothing to lose", () => {
+    let s = createGameShowState(2);
+    s = applySpin(s, seg("bankrupt1"), null);
+    expect(s.teams[0].score).toBe(0);
+    expect(s.lastOutcome).toMatch(/no points to lose/i);
+  });
+
+  it("only penalizes the active team", () => {
     let s = createGameShowState(2);
     s = { ...s, teams: s.teams.map((t) => ({ ...t, score: 900 })) };
     s = applySpin(s, seg("bankrupt1"), null);
-    expect(s.teams[0].score).toBe(0);
+    expect(s.teams[0].score).toBe(900 - BANKRUPT_PENALTY);
     expect(s.teams[1].score).toBe(900);
   });
 
@@ -253,9 +272,9 @@ describe("a full round", () => {
     expect(s.teams[1].score).toBe(0);
     s = nextTurn(s);
 
-    // Blue hits Bankrupt and loses the 600.
+    // Blue hits a Setback: docked 400 of the 600, not wiped out.
     s = applySpin(s, seg("bankrupt1"), null);
-    expect(s.teams[0].score).toBe(0);
+    expect(s.teams[0].score).toBe(600 - BANKRUPT_PENALTY);
     s = nextTurn(s);
 
     // Red spins 1000 and wins it.
