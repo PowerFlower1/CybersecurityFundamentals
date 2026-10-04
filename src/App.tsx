@@ -1333,7 +1333,9 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="flex-1 flex flex-col items-center justify-center py-12 space-y-12 w-full max-w-5xl mx-auto"
             >
-              <div className="flex items-center gap-4 fixed top-6 right-6 z-20">
+              {/* Instructor bar — part of the page, so it scrolls away with
+                  the content instead of floating over it. */}
+              <div className="self-stretch flex items-center justify-end gap-4 px-4">
                 {isAdmin && (
                   <motion.button
                     whileHover={{ scale: 1.05 }}
