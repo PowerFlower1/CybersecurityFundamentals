@@ -48,6 +48,7 @@ import {
 } from "./lib/campaign";
 import { standardsFor, standardsCoverage } from "./lib/standards";
 import { SoloMap, CONCEPTS } from "./components/SoloMap";
+import { AboutReadyForce } from "./components/AboutReadyForce";
 import { GameShowHost } from "./components/GameShowHost";
 import { GameShowPlayer } from "./components/GameShowPlayer";
 import {
@@ -1321,11 +1322,6 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="text-center text-slate-400 text-sm mt-4 opacity-70 mb-4 font-medium flex items-center justify-center gap-2">
-                <img src="/rfc-logo.svg" alt="" className="w-6 h-6" />
-                <span>Created by</span>
-                <span className="font-bold text-slate-600">Ready Force Cyber Labs</span>
-              </div>
             </motion.div>
           )}
 
@@ -1337,7 +1333,9 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="flex-1 flex flex-col items-center justify-center py-12 space-y-12 w-full max-w-5xl mx-auto"
             >
-              <div className="flex items-center gap-4 fixed top-6 right-6 z-20">
+              {/* Instructor bar — part of the page, so it scrolls away with
+                  the content instead of floating over it. */}
+              <div className="self-stretch flex items-center justify-end gap-4 px-4">
                 {isAdmin && (
                   <motion.button
                     whileHover={{ scale: 1.05 }}
@@ -3038,9 +3036,17 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      <footer className="py-6 text-center text-slate-700 text-[10px] font-mono uppercase tracking-[0.2em] border-t border-white/5">
-        SESSION ID: {roomId || "SECURE"} // ENCRYPTION: AES-256
-      </footer>
+      {/* Organisation block — outside <main> so its closing band can run edge
+          to edge rather than stopping at the content column. */}
+      {gameState === "login" && <AboutReadyForce />}
+
+      {/* No session exists on the landing page, so the session footer would
+          only ever read "SECURE"; the brand band above closes that page. */}
+      {gameState !== "login" && (
+        <footer className="py-6 text-center text-slate-700 text-[10px] font-mono uppercase tracking-[0.2em] border-t border-white/5">
+          SESSION ID: {roomId || "SECURE"} // ENCRYPTION: AES-256
+        </footer>
+      )}
     </div>
     </MotionConfig>
   );
