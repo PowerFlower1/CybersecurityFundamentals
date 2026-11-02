@@ -315,9 +315,10 @@ export default function App() {
     };
   }, []);
 
-  // Admin dashboard — poll the list of active sessions.
+  // Poll the session list on the admin dashboard, and in the lobby so it can
+  // offer a way back into any session that is still running.
   useEffect(() => {
-    if (gameState !== "admin_dashboard" || !isAdmin) return;
+    if ((gameState !== "admin_dashboard" && gameState !== "lobby") || !isAdmin) return;
     let cancelled = false;
     const poll = async () => {
       try {
@@ -578,6 +579,21 @@ export default function App() {
     setPlayers([]);
     setSessionTimeLeft(null);
     setGameState("lobby");
+  };
+
+  /**
+   * Reopen the host screen for a session that is still running. Sessions live
+   * on the server, so leaving the host screen — a stray click, a reload, a
+   * detour to solo practice — never stopped the game; this browser just lost
+   * track of it. Without this, the only way back was to start over.
+   */
+  const returnToSession = (code: string) => {
+    setHostError("");
+    setRoomId(code);
+    setRoomData(null);
+    setPlayers([]);
+    setSessionTimeLeft(null);
+    setGameState("hosting");
   };
 
   // Build the results CSV in the browser and hand it to the user as a
@@ -1377,6 +1393,58 @@ export default function App() {
                   Configure assessment parameters, select the difficulty level, and launch a new live session for your students.
                 </p>
               </div>
+
+              {/* Sessions still running on the server. Shown first, ahead of
+                  the controls for starting something new, because a host who
+                  lands here mid-class almost always wants to get back. */}
+              {isAdmin && allRooms.some((r) => r.status !== "finished") && (
+                <section
+                  aria-labelledby="live-sessions-heading"
+                  className="w-full max-w-4xl px-4"
+                >
+                  <div className="rounded-3xl border border-emerald-200 bg-emerald-50/60 p-4 sm:p-5 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5" aria-hidden="true">
+                        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 motion-safe:animate-ping" />
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                      </span>
+                      <h3
+                        id="live-sessions-heading"
+                        className="text-xs font-bold uppercase tracking-widest text-emerald-800"
+                      >
+                        Still running
+                      </h3>
+                    </div>
+                    <ul className="space-y-2">
+                      {allRooms
+                        .filter((r) => r.status !== "finished")
+                        .map((r) => (
+                          <li
+                            key={r.id}
+                            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl bg-white border border-emerald-100 px-4 py-3"
+                          >
+                            <span className="font-mono text-lg font-bold text-slate-900">{r.id}</span>
+                            <span className="text-sm text-slate-600">
+                              {r.mode === "gameshow" ? "Game show" : "Live quiz"}
+                              {" · "}
+                              {r.status === "started" ? "In progress" : "Waiting for students"}
+                              {" · "}
+                              {r.playerCount} {r.playerCount === 1 ? "student" : "students"}
+                            </span>
+                            <button
+                              onClick={() => returnToSession(r.id)}
+                              className="ml-auto inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 transition-colors focus:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400/50"
+                            >
+                              <Play className="w-4 h-4" aria-hidden="true" />
+                              Return to game
+                              <span className="sr-only"> {r.id}</span>
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                </section>
+              )}
 
               {/* Difficulty Selection */}
               {isAdmin && (
@@ -2612,7 +2680,7 @@ export default function App() {
                       <div className="hidden md:block w-px h-10 bg-slate-200" />
                       <div className="space-y-1 w-1/2 md:w-auto">
                         <p className="text-[10px] uppercase font-semibold text-slate-500 tracking-widest">Host</p>
-                        <p className="text-lg font-semibold text-slate-800 truncate max-w-[150px] md:max-w-none">{room.hostName || room.hostId}</p>
+                        <p className="text-lg font-semibold text-slate-800 truncate max-w-[150px] md:max-w-none">{room.hostName || "—"}</p>
                       </div>
                       <div className="hidden md:block w-px h-10 bg-slate-200" />
                       <div className="space-y-1 w-1/2 md:w-auto">
@@ -2623,7 +2691,7 @@ export default function App() {
                       <div className="space-y-1 w-1/2 md:w-auto">
                         <p className="text-[10px] uppercase font-semibold text-slate-500 tracking-widest">Created At</p>
                         <p className="text-sm text-slate-500 font-medium">
-                          {room.createdAt?.toDate ? room.createdAt.toDate().toLocaleString() : 'N/A'}
+                          {typeof room.createdAt === "number" ? new Date(room.createdAt).toLocaleString() : "N/A"}
                         </p>
                       </div>
                     </div>
@@ -2636,6 +2704,16 @@ export default function App() {
                       )}>
                         {room.status}
                       </div>
+                      {room.status !== "finished" && (
+                        <button
+                          onClick={() => returnToSession(room.id)}
+                          className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 transition-colors focus:outline-none focus-visible:ring-4 focus-visible:ring-emerald-400/50"
+                        >
+                          <Play className="w-4 h-4" aria-hidden="true" />
+                          Return to game
+                          <span className="sr-only"> {room.id}</span>
+                        </button>
+                      )}
                       <motion.button
                         whileHover={{ scale: 1.1 }}
                         whileTap={{ scale: 0.9 }}
