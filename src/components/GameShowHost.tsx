@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { motion } from "motion/react";
 import { cn } from "../lib/utils";
-import { WHEEL } from "../lib/gameshow";
+import { WHEEL, roundInfo, winningTeams } from "../lib/gameshow";
 import type { GameShowView } from "../lib/api";
 
 // The host's projector view: designed to be read from the back of a classroom,
@@ -120,6 +121,13 @@ export function GameShowHost({
   const landedIndex = gameshow.spin ? WHEEL.findIndex((s) => s.id === gameshow.spin!.id) : null;
   const tc = team ? teamClass(team.color) : teamClass("blue");
   const ranked = [...gameshow.teams].sort((a, b) => b.score - a.score);
+  const over = gameshow.phase === "final";
+  const { round, rounds } = roundInfo(gameshow as never);
+  const winners = winningTeams(gameshow as never);
+
+  // Ending a live session cannot be undone, and this button sits on a
+  // projector in front of a class — one stray click must not kill the game.
+  const [confirmingEnd, setConfirmingEnd] = useState(false);
 
   return (
     <div className="flex-1 flex flex-col gap-6">
@@ -137,14 +145,35 @@ export function GameShowHost({
         </div>
       </div>
 
-      {/* Whose turn */}
-      <div className={cn("rounded-3xl p-5 text-center ring-2", tc.bg, tc.ring)}>
-        <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-slate-300">Now playing</p>
-        <p className={cn("text-4xl font-black tracking-tight", tc.text)}>{team?.name ?? "—"}</p>
-        {gameshow.doubleNext && (
-          <p className="mt-1 text-sm font-bold text-amber-300">Double armed — next question is worth 2×</p>
-        )}
-      </div>
+      {/* Whose turn — or, once every round is played, who won */}
+      {over ? (
+        <div className="rounded-3xl p-6 text-center ring-2 ring-amber-400/50 bg-amber-400/10">
+          <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-amber-200">
+            Final result after {rounds} round{rounds === 1 ? "" : "s"}
+          </p>
+          {winners.length === 0 ? (
+            <p className="text-4xl font-black tracking-tight text-white">No points scored</p>
+          ) : winners.length === 1 ? (
+            <p className={cn("text-5xl font-black tracking-tight", teamClass(winners[0].color).text)}>
+              {winners[0].name} wins
+            </p>
+          ) : (
+            <p className="text-4xl font-black tracking-tight text-white">
+              Tie — {winners.map((w) => w.name).join(" & ")}
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className={cn("rounded-3xl p-5 text-center ring-2", tc.bg, tc.ring)}>
+          <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-slate-300">
+            Now playing · Round {round} of {rounds}
+          </p>
+          <p className={cn("text-4xl font-black tracking-tight", tc.text)}>{team?.name ?? "—"}</p>
+          {gameshow.doubleNext && (
+            <p className="mt-1 text-sm font-bold text-amber-300">Double armed — next question is worth 2×</p>
+          )}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-[auto_1fr] gap-8 items-start">
         <Wheel
@@ -194,6 +223,16 @@ export function GameShowHost({
             </div>
           )}
 
+          {over && (
+            <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-8">
+              <p className="text-3xl font-black text-white">That's the game</p>
+              <p className="text-slate-300 max-w-sm">
+                All {rounds} round{rounds === 1 ? "" : "s"} played — {gameshow.turnsTaken} turns.
+                Final standings are below.
+              </p>
+            </div>
+          )}
+
           {gameshow.phase === "resolved" && (
             <div className="flex-1 flex flex-col items-center justify-center text-center gap-4 rounded-3xl border border-white/10 bg-white/5 p-8">
               <p className="text-4xl font-black text-white">{gameshow.spin?.label}</p>
@@ -203,30 +242,70 @@ export function GameShowHost({
 
           {/* Host controls */}
           <div className="flex flex-wrap gap-3">
-            {gameshow.phase === "idle" ? (
-              <button
-                onClick={onSpin}
-                disabled={busy || playerCount === 0}
-                className="flex-1 min-w-[180px] py-5 rounded-2xl bg-amber-400 text-black text-xl font-black hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            {/* Play controls disappear once the game is over — there is
+                nothing left to spin for. */}
+            {!over &&
+              (gameshow.phase === "idle" ? (
+                <button
+                  onClick={onSpin}
+                  disabled={busy || playerCount === 0}
+                  className="flex-1 min-w-[180px] py-5 rounded-2xl bg-amber-400 text-black text-xl font-black hover:bg-amber-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {playerCount === 0 ? "Waiting for players" : busy ? "Spinning…" : "SPIN THE WHEEL"}
+                </button>
+              ) : (
+                <button
+                  onClick={onNextTurn}
+                  disabled={busy || gameshow.phase === "question"}
+                  title={gameshow.phase === "question" ? "Waiting for the team to answer" : undefined}
+                  className="flex-1 min-w-[180px] py-5 rounded-2xl bg-white text-black text-xl font-black hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  {gameshow.phase === "question"
+                    ? "Waiting for an answer…"
+                    : gameshow.turnsTaken + 1 >= gameshow.turnLimit
+                      ? "FINAL RESULTS"
+                      : "NEXT TEAM"}
+                </button>
+              ))}
+
+            {confirmingEnd ? (
+              // Two steps, and the cancel is the easier target: a mis-click
+              // on a projected board should never close a live session.
+              <div
+                role="alertdialog"
+                aria-label="Confirm ending the session"
+                className="flex-1 min-w-[280px] flex flex-wrap items-center gap-3 rounded-2xl border border-rose-500/30 bg-rose-500/10 p-3"
               >
-                {playerCount === 0 ? "Waiting for players" : busy ? "Spinning…" : "SPIN THE WHEEL"}
-              </button>
+                <p className="flex-1 min-w-[160px] text-sm font-bold text-rose-100">
+                  End the session for everyone? This cannot be undone.
+                </p>
+                <button
+                  onClick={() => setConfirmingEnd(false)}
+                  autoFocus
+                  className="px-5 py-3 rounded-xl bg-white text-black font-bold hover:bg-slate-200 transition-colors"
+                >
+                  Keep playing
+                </button>
+                <button
+                  onClick={onEnd}
+                  className="px-5 py-3 rounded-xl bg-rose-500 text-white font-bold hover:bg-rose-400 transition-colors"
+                >
+                  Yes, end it
+                </button>
+              </div>
             ) : (
               <button
-                onClick={onNextTurn}
-                disabled={busy || gameshow.phase === "question"}
-                title={gameshow.phase === "question" ? "Waiting for the team to answer" : undefined}
-                className="flex-1 min-w-[180px] py-5 rounded-2xl bg-white text-black text-xl font-black hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                onClick={() => setConfirmingEnd(true)}
+                className={cn(
+                  "px-6 py-5 rounded-2xl font-bold transition-colors border",
+                  over
+                    ? "flex-1 min-w-[180px] bg-white text-black border-white text-xl font-black hover:bg-slate-200"
+                    : "bg-rose-500/15 text-rose-300 border-rose-500/30 hover:bg-rose-500/25",
+                )}
               >
-                {gameshow.phase === "question" ? "Waiting for an answer…" : "NEXT TEAM"}
+                {over ? "Close session" : "End Game"}
               </button>
             )}
-            <button
-              onClick={onEnd}
-              className="px-6 py-5 rounded-2xl bg-rose-500/15 text-rose-300 border border-rose-500/30 font-bold hover:bg-rose-500/25 transition-colors"
-            >
-              End Game
-            </button>
           </div>
         </div>
       </div>

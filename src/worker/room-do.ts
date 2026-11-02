@@ -127,7 +127,7 @@ export class RoomDO {
         hostName: typeof body.hostName === "string" && body.hostName ? body.hostName.slice(0, 50) : "Instructor",
         createdAt: Date.now(),
         players: {},
-        gameshow: gameshowMode ? createGameShowState(Number(body.teamCount) || 2) : undefined,
+        gameshow: gameshowMode ? createGameShowState(Number(body.teamCount) || 2, Number(body.rounds) || undefined) : undefined,
         // The worker passes the bank in, since it lives in GlobalDO.
         questions: gameshowMode && Array.isArray(body.questions) ? body.questions : undefined,
         usedQuestionIds: [],
@@ -209,6 +209,9 @@ export class RoomDO {
       case "spin": {
         if (r.mode !== "gameshow" || !r.gameshow) {
           return json({ error: "This session is not in game-show mode." }, 409);
+        }
+        if (r.gameshow.phase === "final") {
+          return json({ error: "The game is over — every round has been played." }, 409);
         }
         if (r.gameshow.phase !== "idle") {
           return json({ error: "Finish the current turn before spinning again." }, 409);

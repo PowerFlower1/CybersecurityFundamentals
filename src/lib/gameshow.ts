@@ -57,6 +57,16 @@ export const TEAM_PRESETS: { id: string; name: string; color: string }[] = [
   { id: "amber", name: "Gold Team", color: "amber" },
 ];
 
+/**
+ * How many full rounds a game runs before the final standings.
+ *
+ * The limit is a count of *turns*, derived as teams x rounds, so the game can
+ * only end on a round boundary — every team gets exactly the same number of
+ * turns however many teams are playing. Ending mid-round would hand the last
+ * teams a turn the others never got.
+ */
+export const DEFAULT_ROUNDS = 3;
+
 export const MIN_TEAMS = 2;
 export const MAX_TEAMS = TEAM_PRESETS.length;
 
@@ -64,7 +74,8 @@ export const MAX_TEAMS = TEAM_PRESETS.length;
 export type GameShowPhase =
   | "idle" // waiting for the host to spin
   | "question" // a question is on screen, the active team may answer
-  | "resolved"; // outcome shown, waiting for the host to advance
+  | "resolved" // outcome shown, waiting for the host to advance
+  | "final"; // every round played; final standings on the board
 
 export interface GameShowState {
   teams: Team[];
@@ -81,6 +92,8 @@ export interface GameShowState {
   lastOutcome: string | null;
   /** Turns taken so far, used to end the game after a set number. */
   turnsTaken: number;
+  /** Total turns in the game; always a whole number of rounds. */
+  turnLimit: number;
 }
 
 export function createTeams(count: number): Team[] {
@@ -88,9 +101,11 @@ export function createTeams(count: number): Team[] {
   return TEAM_PRESETS.slice(0, n).map((t) => ({ ...t, score: 0 }));
 }
 
-export function createGameShowState(teamCount: number): GameShowState {
+export function createGameShowState(teamCount: number, rounds = DEFAULT_ROUNDS): GameShowState {
+  const teams = createTeams(teamCount);
+  const r = Math.max(1, Math.floor(rounds) || DEFAULT_ROUNDS);
   return {
-    teams: createTeams(teamCount),
+    teams,
     turnIndex: 0,
     phase: "idle",
     spin: null,
@@ -98,6 +113,7 @@ export function createGameShowState(teamCount: number): GameShowState {
     doubleNext: false,
     lastOutcome: null,
     turnsTaken: 0,
+    turnLimit: teams.length * r,
   };
 }
 
@@ -133,7 +149,7 @@ export const activeTeam = (s: GameShowState): Team | null => s.teams[s.turnIndex
  */
 export function applySpin(state: GameShowState, segment: WheelSegment, questionId: string | null): GameShowState {
   const team = activeTeam(state);
-  if (!team) return state;
+  if (!team || state.phase === "final") return state;
 
   switch (segment.kind) {
     case "lose_turn":
@@ -205,18 +221,56 @@ export function applyAnswer(state: GameShowState, correct: boolean): GameShowSta
   };
 }
 
-/** Hand play to the next team and reset per-turn state. */
+/**
+ * Hand play to the next team and reset per-turn state.
+ *
+ * When the last turn of the last round has been played the game moves to
+ * `final` instead, which locks out further spins and puts the standings on the
+ * board. A game already in `final` is left alone.
+ */
 export function nextTurn(state: GameShowState): GameShowState {
-  if (state.teams.length === 0) return state;
+  if (state.teams.length === 0 || state.phase === "final") return state;
+
+  const turnsTaken = state.turnsTaken + 1;
+  const over = turnsTaken >= state.turnLimit;
+
   return {
     ...state,
-    turnIndex: (state.turnIndex + 1) % state.teams.length,
-    phase: "idle",
+    // Hold the turn pointer on the team that just played once the game is
+    // over, so the final board does not highlight a team that never went.
+    turnIndex: over ? state.turnIndex : (state.turnIndex + 1) % state.teams.length,
+    phase: over ? "final" : "idle",
     spin: null,
     questionId: null,
     lastOutcome: null,
-    turnsTaken: state.turnsTaken + 1,
+    turnsTaken,
   };
+}
+
+/** True once every round has been played. */
+export const isGameOver = (s: GameShowState): boolean => s.phase === "final";
+
+/**
+ * Which round is being played (1-based) and how many there are. Both are
+ * derived from the turn count so they cannot drift from it.
+ */
+export function roundInfo(s: GameShowState): { round: number; rounds: number } {
+  const teams = s.teams.length || 1;
+  const rounds = Math.max(1, Math.round(s.turnLimit / teams));
+  const round = Math.min(rounds, Math.floor(s.turnsTaken / teams) + 1);
+  return { round, rounds };
+}
+
+/**
+ * The team or teams on the top score. Returns every tied team rather than
+ * picking one, because announcing a single "winner" of a tie in front of a
+ * class is worse than announcing the tie. A game where nobody scored has no
+ * winner at all.
+ */
+export function winningTeams(s: GameShowState): Team[] {
+  const top = Math.max(...s.teams.map((t) => t.score), 0);
+  if (top <= 0) return [];
+  return rankedTeams(s).filter((t) => t.score === top);
 }
 
 /** Teams ranked for the leaderboard: highest score first, then name. */

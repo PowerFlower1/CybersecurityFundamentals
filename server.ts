@@ -240,7 +240,7 @@ async function startServer() {
   app.post("/api/session", (req, res) => {
     if (!requireInstructor(req, res)) return;
     sweepRooms();
-    const { difficulty, questionCount, timePerQuestion, hostName, mode, teamCount } = req.body ?? {};
+    const { difficulty, questionCount, timePerQuestion, hostName, mode, teamCount, rounds } = req.body ?? {};
     const code = newCode();
     const gameshowMode = mode === "gameshow";
     rooms.set(code, {
@@ -254,7 +254,7 @@ async function startServer() {
       hostName: typeof hostName === "string" && hostName ? hostName.slice(0, 50) : "Instructor",
       createdAt: Date.now(),
       players: new Map(),
-      gameshow: gameshowMode ? createGameShowState(Number(teamCount) || 2) : undefined,
+      gameshow: gameshowMode ? createGameShowState(Number(teamCount) || 2, Number(rounds) || undefined) : undefined,
       usedQuestionIds: [],
     });
     res.json({ code });
@@ -319,6 +319,9 @@ async function startServer() {
     if (!room) return res.status(404).json({ error: "Session not found." });
     if (room.mode !== "gameshow" || !room.gameshow) {
       return res.status(409).json({ error: "This session is not in game-show mode." });
+    }
+    if (room.gameshow.phase === "final") {
+      return res.status(409).json({ error: "The game is over — every round has been played." });
     }
     if (room.gameshow.phase !== "idle") {
       return res.status(409).json({ error: "Finish the current turn before spinning again." });
