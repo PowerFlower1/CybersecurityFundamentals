@@ -54,6 +54,24 @@ describe("RoomDO", () => {
     });
   });
 
+  // The Worker's /api/sessions builds its list from this state, and the lobby
+  // needs mode and host to label each session it offers to return to.
+  it("reports mode and host name, which the session list relies on", async () => {
+    const show = new RoomDO(fakeState());
+    await show.fetch(req("create", { code: "SHOW01", mode: "gameshow", teamCount: 2, hostName: "Ms. Rivera" }));
+    expect(await (await show.fetch(req("state"))).json()).toMatchObject({
+      mode: "gameshow",
+      hostName: "Ms. Rivera",
+    });
+
+    const quiz = new RoomDO(fakeState());
+    await quiz.fetch(req("create", { code: "QUIZ01", hostName: "Mr. Okafor" }));
+    expect(await (await quiz.fetch(req("state"))).json()).toMatchObject({
+      mode: "quiz",
+      hostName: "Mr. Okafor",
+    });
+  });
+
   it("falls back to defaults for an invalid difficulty and missing settings", async () => {
     const room = new RoomDO(fakeState());
     await room.fetch(req("create", { code: "X", difficulty: "impossible" }));

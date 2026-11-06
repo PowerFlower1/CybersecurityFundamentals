@@ -268,6 +268,8 @@ async function startServer() {
       .map((r) => ({
         code: r.code,
         status: r.status,
+        mode: r.mode,
+        hostName: r.hostName,
         difficulty: r.difficulty,
         playerCount: r.players.size,
         createdAt: r.createdAt,

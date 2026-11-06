@@ -103,7 +103,15 @@ api.get("/sessions", async (c) => {
     const res = await callDO(roomStub(c.env, code), "state");
     if (res.ok) {
       const r: any = await res.json();
-      sessions.push({ code, status: r.status, difficulty: r.difficulty, playerCount: r.players.length, createdAt });
+      sessions.push({
+        code,
+        status: r.status,
+        mode: r.mode,
+        hostName: r.hostName,
+        difficulty: r.difficulty,
+        playerCount: r.players.length,
+        createdAt,
+      });
     }
   }
   sessions.sort((a, b) => b.createdAt - a.createdAt);

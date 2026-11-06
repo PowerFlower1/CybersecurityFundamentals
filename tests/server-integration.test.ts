@@ -257,6 +257,33 @@ describe("session lifecycle", () => {
     expect(room.timePerQuestion).toBe(0);
   }, 15_000);
 
+  // The lobby's "Return to game" list labels each running session and the
+  // admin dashboard shows its host, so both fields must come back.
+  it("lists sessions with their mode and host so a host can find their way back", async () => {
+    const { token } = (await (await login("10.0.0.6")).json()) as { token: string };
+
+    const create = async (body: object) =>
+      ((await (
+        await fetch(`${BASE}/api/session`, {
+          method: "POST",
+          headers: authHeaders(token),
+          body: JSON.stringify(body),
+        })
+      ).json()) as { code: string }).code;
+
+    const show = await create({ mode: "gameshow", teamCount: 2, hostName: "Ms. Rivera" });
+    const quiz = await create({ hostName: "Mr. Okafor" });
+
+    const { sessions } = (await (
+      await fetch(`${BASE}/api/sessions`, { headers: authHeaders(token) })
+    ).json()) as { sessions: any[] };
+
+    const byCode = Object.fromEntries(sessions.map((s) => [s.code, s]));
+    expect(byCode[show]).toMatchObject({ mode: "gameshow", hostName: "Ms. Rivera", status: "waiting" });
+    expect(byCode[quiz]).toMatchObject({ mode: "quiz", hostName: "Mr. Okafor", status: "waiting" });
+    expect(typeof byCode[show].createdAt).toBe("number");
+  });
+
   it("returns 404 for a nonexistent session code", async () => {
     const getRes = await fetch(`${BASE}/api/session/ZZZZZZ`);
     expect(getRes.status).toBe(404);
